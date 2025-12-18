@@ -4,11 +4,36 @@ import db, { schema } from "@/database";
 import logger from "@/logging";
 import { McpServerRuntimeManager } from "@/mcp-server-runtime";
 import { secretManager } from "@/secretsmanager";
-import type { InsertMcpServer, McpServer, UpdateMcpServer } from "@/types";
+import type {
+  InsertMcpServer,
+  McpServer,
+  SecretStorageType,
+  UpdateMcpServer,
+} from "@/types";
 import AgentToolModel from "./agent-tool";
 import InternalMcpCatalogModel from "./internal-mcp-catalog";
 import McpServerUserModel from "./mcp-server-user";
 import ToolModel from "./tool";
+
+/**
+ * Compute the secret storage type based on secretId and secret flags.
+ */
+function computeSecretStorageType(
+  secretId: string | null,
+  isVault: boolean | null,
+  isByosVault: boolean | null,
+): SecretStorageType {
+  if (!secretId) {
+    return "none";
+  }
+  if (isVault) {
+    return "vault";
+  }
+  if (isByosVault) {
+    return "external_vault";
+  }
+  return "database";
+}
 
 class McpServerModel {
   static async create(server: InsertMcpServer): Promise<McpServer> {
@@ -19,10 +44,10 @@ class McpServerModel {
     let mcpServerName = serverData.name;
     if (serverData.serverType === "local") {
       if (serverData.teamId) {
-        // Team installation: use teamId for unique pod name
+        // Team installation: use teamId for unique deployment name
         mcpServerName = `${serverData.name}-${serverData.teamId}`;
       } else if (userId) {
-        // Personal installation: use userId for unique pod name
+        // Personal installation: use userId for unique deployment name
         mcpServerName = `${serverData.name}-${userId}`;
       }
     }
@@ -100,6 +125,8 @@ class McpServerModel {
         ownerEmail: schema.usersTable.email,
         catalogName: schema.internalMcpCatalogTable.name,
         teamName: schema.teamsTable.name,
+        secretIsVault: schema.secretsTable.isVault,
+        secretIsByosVault: schema.secretsTable.isByosVault,
       })
       .from(schema.mcpServersTable)
       .leftJoin(
@@ -113,6 +140,10 @@ class McpServerModel {
       .leftJoin(
         schema.teamsTable,
         eq(schema.mcpServersTable.teamId, schema.teamsTable.id),
+      )
+      .leftJoin(
+        schema.secretsTable,
+        eq(schema.mcpServersTable.secretId, schema.secretsTable.id),
       )
       .$dynamic();
 
@@ -162,6 +193,13 @@ class McpServerModel {
           }
         : null;
 
+      // Compute secret storage type
+      const secretStorageType = computeSecretStorageType(
+        result.server.secretId,
+        result.secretIsVault,
+        result.secretIsByosVault,
+      );
+
       return {
         ...result.server,
         ownerEmail: result.ownerEmail,
@@ -169,6 +207,7 @@ class McpServerModel {
         users: userDetails.map((u) => u.userId),
         userDetails,
         teamDetails,
+        secretStorageType,
       };
     });
 
@@ -197,6 +236,8 @@ class McpServerModel {
         server: schema.mcpServersTable,
         ownerEmail: schema.usersTable.email,
         teamName: schema.teamsTable.name,
+        secretIsVault: schema.secretsTable.isVault,
+        secretIsByosVault: schema.secretsTable.isByosVault,
       })
       .from(schema.mcpServersTable)
       .leftJoin(
@@ -206,6 +247,10 @@ class McpServerModel {
       .leftJoin(
         schema.teamsTable,
         eq(schema.mcpServersTable.teamId, schema.teamsTable.id),
+      )
+      .leftJoin(
+        schema.secretsTable,
+        eq(schema.mcpServersTable.secretId, schema.secretsTable.id),
       )
       .where(eq(schema.mcpServersTable.id, id));
 
@@ -224,12 +269,20 @@ class McpServerModel {
         }
       : null;
 
+    // Compute secret storage type
+    const secretStorageType = computeSecretStorageType(
+      result.server.secretId,
+      result.secretIsVault,
+      result.secretIsByosVault,
+    );
+
     return {
       ...result.server,
       ownerEmail: result.ownerEmail,
       users: userDetails.map((u) => u.userId),
       userDetails,
       teamDetails,
+      secretStorageType,
     };
   }
 
@@ -308,7 +361,7 @@ class McpServerModel {
       return false;
     }
 
-    // For local servers, stop and remove the K8s pod
+    // For local servers, stop and remove the K8s deployment
     if (mcpServer.serverType === "local") {
       // Clean up agent_tools that use this server as execution source
       // Must be done before deletion to ensure agents do not retain unusable tool assignments; FK constraint would only null out the reference, not remove the assignment
@@ -330,11 +383,13 @@ class McpServerModel {
 
       try {
         await McpServerRuntimeManager.removeMcpServer(id);
-        logger.info(`Cleaned up K8s pod for MCP server: ${mcpServer.name}`);
+        logger.info(
+          `Cleaned up K8s deployment for MCP server: ${mcpServer.name}`,
+        );
       } catch (error) {
         logger.error(
           { err: error },
-          `Failed to clean up K8s pod for MCP server ${mcpServer.name}:`,
+          `Failed to clean up K8s deployment for MCP server ${mcpServer.name}:`,
         );
         // Continue with deletion even if pod cleanup fails
       }
@@ -350,7 +405,7 @@ class McpServerModel {
 
     // If the MCP server was deleted and it had an associated secret, delete the secret
     if (deleted && mcpServer.secretId) {
-      await secretManager.deleteSecret(mcpServer.secretId);
+      await secretManager().deleteSecret(mcpServer.secretId);
     }
 
     // If the MCP server was deleted and had a catalogId, check if this was the last installation
@@ -409,7 +464,7 @@ class McpServerModel {
     // Load secrets if secretId is present
     let secrets: Record<string, unknown> = {};
     if (mcpServer.secretId) {
-      const secretRecord = await secretManager.getSecret(mcpServer.secretId);
+      const secretRecord = await secretManager().getSecret(mcpServer.secretId);
       if (secretRecord) {
         secrets = secretRecord.secret;
       }
@@ -500,7 +555,7 @@ class McpServerModel {
     // Load secrets if secretId is provided
     let secrets: Record<string, unknown> = {};
     if (secretId) {
-      const secretRecord = await secretManager.getSecret(secretId);
+      const secretRecord = await secretManager().getSecret(secretId);
       if (secretRecord) {
         secrets = secretRecord.secret;
       }

@@ -14,6 +14,7 @@ export const RouteId = {
   AssignToolToAgent: "assignToolToAgent",
   BulkAssignTools: "bulkAssignTools",
   BulkUpdateAgentTools: "bulkUpdateAgentTools",
+  AutoConfigureAgentToolPolicies: "autoConfigureAgentToolPolicies",
   UnassignToolFromAgent: "unassignToolFromAgent",
   GetAgentTools: "getAgentTools",
   GetAllAgentTools: "getAllAgentTools",
@@ -32,6 +33,7 @@ export const RouteId = {
   GetInternalMcpCatalogItem: "getInternalMcpCatalogItem",
   UpdateInternalMcpCatalogItem: "updateInternalMcpCatalogItem",
   DeleteInternalMcpCatalogItem: "deleteInternalMcpCatalogItem",
+  DeleteInternalMcpCatalogItemByName: "deleteInternalMcpCatalogItemByName",
 
   // MCP Server Routes
   GetMcpServers: "getMcpServers",
@@ -96,6 +98,7 @@ export const RouteId = {
   GetInteractions: "getInteractions",
   GetInteraction: "getInteraction",
   GetUniqueExternalAgentIds: "getUniqueExternalAgentIds",
+  GetUniqueUserIds: "getUniqueUserIds",
 
   // MCP Tool Call Routes
   GetMcpToolCalls: "getMcpToolCalls",
@@ -113,6 +116,7 @@ export const RouteId = {
   GetTrustedDataPolicy: "getTrustedDataPolicy",
   UpdateTrustedDataPolicy: "updateTrustedDataPolicy",
   DeleteTrustedDataPolicy: "deleteTrustedDataPolicy",
+  GetPolicyConfigSubagentPrompt: "getPolicyConfigSubagentPrompt",
 
   // Dual LLM Config Routes
   GetDefaultDualLlmConfig: "getDefaultDualLlmConfig",
@@ -145,10 +149,21 @@ export const RouteId = {
   DeleteChatConversation: "deleteChatConversation",
   GenerateChatConversationTitle: "generateChatConversationTitle",
   GetChatMcpTools: "getChatMcpTools",
+  GetConversationEnabledTools: "getConversationEnabledTools",
+  UpdateConversationEnabledTools: "updateConversationEnabledTools",
+  DeleteConversationEnabledTools: "deleteConversationEnabledTools",
+  GetChatModels: "getChatModels",
 
-  // Chat Settings Routes
-  GetChatSettings: "getChatSettings",
-  UpdateChatSettings: "updateChatSettings",
+  // Chat API Key Routes
+  GetChatApiKeys: "getChatApiKeys",
+  CreateChatApiKey: "createChatApiKey",
+  GetChatApiKey: "getChatApiKey",
+  UpdateChatApiKey: "updateChatApiKey",
+  DeleteChatApiKey: "deleteChatApiKey",
+  SetChatApiKeyDefault: "setChatApiKeyDefault",
+  UnsetChatApiKeyDefault: "unsetChatApiKeyDefault",
+  UpdateChatApiKeyProfiles: "updateChatApiKeyProfiles",
+  BulkAssignChatApiKeysToProfiles: "bulkAssignChatApiKeysToProfiles",
 
   // Prompt Routes
   GetPrompts: "getPrompts",
@@ -214,7 +229,9 @@ export const RouteId = {
 
   // Secrets Routes
   GetSecretsType: "getSecretsType",
+  GetSecret: "getSecret",
   CheckSecretsConnectivity: "checkSecretsConnectivity",
+  InitializeSecretsManager: "initializeSecretsManager",
 } as const;
 
 export type RouteId = (typeof RouteId)[keyof typeof RouteId];

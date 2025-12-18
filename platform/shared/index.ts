@@ -8,8 +8,10 @@ export * from "./model-constants";
 export * from "./permission.types";
 export * from "./roles";
 export * from "./routes";
+export * from "./test-mcp-server";
 // Theme utilities and config
 export * from "./themes/theme-config";
 export * from "./themes/theme-utils";
 export * from "./types";
+export * from "./utils";
 export * from "./zod-schemas";

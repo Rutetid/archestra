@@ -263,7 +263,7 @@ class McpClient {
       };
     }
     if (mcpServer.secretId) {
-      const secret = await secretManager.getSecret(mcpServer.secretId);
+      const secret = await secretManager().getSecret(mcpServer.secretId);
       if (secret?.secret) {
         logger.info(
           {
@@ -279,7 +279,7 @@ class McpClient {
   }
 
   // Determines the target MCP server ID for a local catalog item
-  // Since there are multiple pods for a single catalog item that can receive request
+  // Since there are multiple deployments for a single catalog item that can receive request
   private async determineTargetMcpServerIdForCatalogItem({
     tool,
     tokenAuth,
@@ -382,9 +382,12 @@ class McpClient {
     // Get all servers for this catalog
     const allServers = await McpServerModel.findByCatalogId(tool.catalogId);
 
-    // Priority 1: Server owned by current user
+    // Priority 1: Personal credential owned by current user (no teamId)
+    // That happens only from chat UI when we know the user ID
     if (tokenAuth.userId) {
-      const userServer = allServers.find((s) => s.ownerId === tokenAuth.userId);
+      const userServer = allServers.find(
+        (s) => s.ownerId === tokenAuth.userId && !s.teamId,
+      );
       if (userServer) {
         logger.info(
           {
@@ -399,7 +402,32 @@ class McpClient {
       }
     }
 
-    // Priority 2: Server whose owner is a member of the token's team
+    // Priority 2: Team token used - we check try to use token without teamId first to prioritize personal credential
+    if (tokenAuth.teamId) {
+      for (const server of allServers) {
+        if (server.ownerId && !server.teamId) {
+          const ownerInTeam = await TeamModel.isUserInTeam(
+            tokenAuth.teamId,
+            server.ownerId,
+          );
+          if (ownerInTeam) {
+            logger.info(
+              {
+                toolName: toolCall.name,
+                catalogId: tool.catalogId,
+                serverId: server.id,
+                ownerId: server.ownerId,
+                teamId: tokenAuth.teamId,
+              },
+              `Dynamic resolution: using server owned by personal credential of ${server.ownerId} of ${server.id} for tool ${toolCall.name}`,
+            );
+            return { targetLocalMcpServerId: server.id };
+          }
+        }
+      }
+    }
+
+    // Priority 3: Team token used - we try to find any token from team
     if (tokenAuth.teamId) {
       for (const server of allServers) {
         if (server.ownerId) {
@@ -424,7 +452,7 @@ class McpClient {
       }
     }
 
-    // Priority 3: Otherwise, if organization-wide token is used, use first available server
+    // Priority 4: Otherwise, if organization-wide token is used, use first available server
     if (tokenAuth.isOrganizationToken && allServers.length > 0) {
       logger.info(
         {
@@ -486,15 +514,22 @@ class McpClient {
       }
 
       // Stdio transport - use K8s attach!
-      const k8sPod = McpServerRuntimeManager.getPod(targetLocalMcpServerId);
-      if (!k8sPod) {
-        throw new Error("Pod not found for MCP server");
+      const k8sDeployment = McpServerRuntimeManager.getDeployment(
+        targetLocalMcpServerId,
+      );
+      if (!k8sDeployment) {
+        throw new Error("Deployment not found for MCP server");
+      }
+
+      const podName = await k8sDeployment.getRunningPodName();
+      if (!podName) {
+        throw new Error("No running pod found for MCP server deployment");
       }
 
       return new K8sAttachTransport({
-        k8sAttach: k8sPod.k8sAttachClient,
-        namespace: k8sPod.k8sNamespace,
-        podName: k8sPod.k8sPodName,
+        k8sAttach: k8sDeployment.k8sAttachClient,
+        namespace: k8sDeployment.k8sNamespace,
+        podName: podName,
         containerName: "mcp-server",
       });
     }
