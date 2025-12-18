@@ -78,7 +78,7 @@ export function MermaidDiagram({
   return (
     <div
       ref={ref}
-      className={`flex justify-center w-full [&_svg]:!max-w-full [&_svg]:!h-auto transition-opacity duration-300 ${
+      className={`flex justify-center w-full [&_svg]:!max-w-full [&_svg]:!h-auto transition-opacity duration-300 motion-reduce:transition-none ${
         isLoaded ? "opacity-100" : "opacity-0"
       }`}
     />
