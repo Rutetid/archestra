@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { PageLayout } from '@/components/page-layout';
+import { PageLayout } from "@/components/page-layout";
 
 export default function CostLayout({
   children,
