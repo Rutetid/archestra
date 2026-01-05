@@ -5,6 +5,8 @@ import type {
   InsertConversation,
   UpdateConversation,
 } from "@/types";
+import ConversationEnabledToolModel from "./conversation-enabled-tool";
+import ToolModel from "./tool";
 
 class ConversationModel {
   static async create(data: InsertConversation): Promise<Conversation> {
@@ -12,6 +14,36 @@ class ConversationModel {
       .insert(schema.conversationsTable)
       .values(data)
       .returning();
+
+    // Disable Archestra tools by default for new conversations
+    // Get all tools assigned to the agent (profile tools)
+    const agentTools = await ToolModel.getToolsByAgent(data.agentId);
+
+    // Get prompt-specific agent delegation tools if a prompt is selected
+    let promptTools: Awaited<
+      ReturnType<typeof ToolModel.getAgentDelegationToolsByPrompt>
+    > = [];
+    if (data.promptId) {
+      promptTools = await ToolModel.getAgentDelegationToolsByPrompt(
+        data.promptId,
+      );
+    }
+
+    // Combine profile tools and prompt-specific tools
+    const allTools = [...agentTools, ...promptTools];
+
+    // Filter out Archestra tools (those starting with "archestra__")
+    // Agent delegation tools (agent__*) should be enabled by default
+    const nonArchestraToolIds = allTools
+      .filter((tool) => !tool.name.startsWith("archestra__"))
+      .map((tool) => tool.id);
+
+    // Set enabled tools to only non-Archestra tools
+    // This creates a custom tool selection with Archestra tools disabled
+    await ConversationEnabledToolModel.setEnabledTools(
+      conversation.id,
+      nonArchestraToolIds,
+    );
 
     const conversationWithAgent = (await ConversationModel.findById({
       id: conversation.id,

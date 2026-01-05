@@ -4,7 +4,14 @@ import type { UIMessage } from "@ai-sdk/react";
 import { Eye, EyeOff, Plus } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { CreateCatalogDialog } from "@/app/mcp-catalog/_parts/create-catalog-dialog";
 import { CustomServerRequestDialog } from "@/app/mcp-catalog/_parts/custom-server-request-dialog";
@@ -80,6 +87,7 @@ export default function ChatPage() {
   const pendingPromptRef = useRef<string | undefined>(undefined);
   const newlyCreatedConversationRef = useRef<string | undefined>(undefined);
   const userMessageJustEdited = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Dialog management for MCP installation
   const { isDialogOpened, openDialog, closeDialog } = useDialogs<
@@ -443,6 +451,14 @@ export default function ChatPage() {
     status,
   ]);
 
+  // Auto-focus textarea when status becomes ready (message sent or stream finished)
+  // or when conversation loads (e.g., new chat created, hard refresh)
+  useLayoutEffect(() => {
+    if (status === "ready" && conversation?.id && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [status, conversation?.id]);
+
   const handleSubmit: PromptInputProps["onSubmit"] = (message, e) => {
     e.preventDefault();
     if (status === "submitted" || status === "streaming") {
@@ -490,56 +506,12 @@ export default function ChatPage() {
     );
   }
 
-  const profileName = conversationPrompt?.agentId
-    ? allProfiles.find((a) => a.id === conversationPrompt.agentId)?.name
-    : null;
-  const promptBadge = (
-    <>
-      {conversationPrompt ? (
-        <div className="flex items-center gap-2">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex items-center px-2 py-1 rounded-md bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 text-xs font-medium cursor-help">
-                  Prompt: {conversationPrompt.name}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent
-                side="top"
-                className="max-w-md max-h-64 overflow-y-auto"
-              >
-                <div className="space-y-2">
-                  {profileName && (
-                    <div>
-                      <div className="font-semibold text-xs mb-1">Profile:</div>
-                      <div className="text-xs">{profileName}</div>
-                    </div>
-                  )}
-                  {conversationPrompt.systemPrompt && (
-                    <div>
-                      <div className="font-semibold text-xs mb-1">
-                        System Prompt:
-                      </div>
-                      <pre className="text-xs whitespace-pre-wrap">
-                        {conversationPrompt.systemPrompt}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      ) : null}
-    </>
-  );
-
   if (!conversationId) {
     const hasNoProfiles = allProfiles.length === 0;
 
     return (
       <PageLayout
-        title="New Chat"
+        title="Chats"
         description="Start a free chat or select a prompt from your library to start a guided chat"
         actionButton={
           <WithPermissions
@@ -609,15 +581,12 @@ export default function ChatPage() {
 
           <div className="sticky top-0 z-10 bg-background border-b p-2 flex items-center justify-between">
             <div className="flex-1" />
-            {conversation?.agent?.name && (
-              <div className="flex-1 text-center">
-                <span className="text-sm font-medium text-muted-foreground">
-                  {conversation.agent.name}
-                </span>
-              </div>
-            )}
+            <div className="flex-1 text-center">
+              <span className="text-sm font-medium text-muted-foreground">
+                {conversationPrompt ? conversationPrompt.name : "Free chat"}
+              </span>
+            </div>
             <div className="flex-1 flex justify-end gap-2 items-center">
-              {promptBadge}
               <Button
                 variant="ghost"
                 size="sm"
@@ -694,8 +663,10 @@ export default function ChatPage() {
                   messageCount={messages.length}
                   agentId={conversation?.agent.id}
                   conversationId={conversation?.id}
+                  promptId={conversation?.promptId}
                   currentConversationChatApiKeyId={conversation?.chatApiKeyId}
                   currentProvider={currentProvider}
+                  textareaRef={textareaRef}
                 />
                 <div className="text-center">
                   <Version inline />
