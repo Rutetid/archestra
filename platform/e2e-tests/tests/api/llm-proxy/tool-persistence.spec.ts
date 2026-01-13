@@ -178,6 +178,30 @@ const ollamaConfig: ToolPersistenceTestConfig = {
   }),
 };
 
+const zhipuaiConfig: ToolPersistenceTestConfig = {
+  providerName: "Zhipuai",
+
+  endpoint: (agentId) => `/v1/zhipuai/${agentId}/chat/completions`,
+
+  headers: (wiremockStub) => ({
+    Authorization: `Bearer ${wiremockStub}`,
+    "Content-Type": "application/json",
+  }),
+
+  buildRequest: (content, tools) => ({
+    model: "glm-4.5-flash",
+    messages: [{ role: "user", content }],
+    tools: tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    })),
+  }),
+};
+
 // =============================================================================
 // Test Suite
 // =============================================================================
@@ -188,6 +212,7 @@ const testConfigs: ToolPersistenceTestConfig[] = [
   geminiConfig,
   vllmConfig,
   ollamaConfig,
+  zhipuaiConfig,
 ];
 
 for (const config of testConfigs) {

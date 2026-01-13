@@ -52,6 +52,10 @@ export function detectProviderFromModel(model: string): SupportedChatProvider {
     return "openai";
   }
 
+  if (lowerModel.includes("glm") || lowerModel.includes("chatglm")) {
+    return "zhipuai";
+  }
+
   // Default to anthropic for backwards compatibility
   // Note: vLLM and Ollama cannot be auto-detected as they can serve any model
   return "anthropic";
@@ -91,7 +95,8 @@ export async function resolveProviderApiKey(params: {
       secret?.secret?.apiKey ??
       secret?.secret?.anthropicApiKey ??
       secret?.secret?.geminiApiKey ??
-      secret?.secret?.openaiApiKey;
+      secret?.secret?.openaiApiKey ??
+      secret?.secret?.zhipuaiApiKey;
     if (secretValue) {
       providerApiKey = secretValue as string;
       apiKeySource = resolvedApiKey.scope;
@@ -114,6 +119,8 @@ export async function resolveProviderApiKey(params: {
       apiKeySource = "environment";
     } else if (provider === "ollama" && config.chat.ollama.apiKey) {
       providerApiKey = config.chat.ollama.apiKey;
+    } else if (provider === "zhipuai" && config.chat.zhipuai.apiKey) {
+      providerApiKey = config.chat.zhipuai.apiKey;
       apiKeySource = "environment";
     }
   }
@@ -222,12 +229,22 @@ export function createLLMModel(params: {
   if (provider === "ollama") {
     // URL format: /v1/ollama/:agentId (SDK appends /chat/completions)
     // Ollama uses OpenAI-compatible API, so we use the OpenAI SDK
-    const client = createOpenAI({
+    const _client = createOpenAI({
       apiKey: apiKey || "EMPTY", // Ollama typically doesn't require API keys
       baseURL: `http://localhost:${config.api.port}/v1/ollama/${agentId}`,
       headers,
     });
     // Use .chat() to force Chat Completions API
+  }
+
+  if (provider === "zhipuai") {
+    // URL format: /v1/zhipuai/:agentId (SDK appends /chat/completions)
+    // Zhipuai is OpenAI-compatible, so we use the OpenAI SDK with custom baseURL
+    const client = createOpenAI({
+      apiKey,
+      baseURL: `http://localhost:${config.api.port}/v1/zhipuai/${agentId}`,
+      headers,
+    });
     return client.chat(modelName);
   }
 

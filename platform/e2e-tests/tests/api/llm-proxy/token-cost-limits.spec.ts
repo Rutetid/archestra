@@ -165,6 +165,33 @@ const ollamaConfig: TokenCostLimitTestConfig = {
   },
 };
 
+const zhipuaiConfig: TokenCostLimitTestConfig = {
+  providerName: "Zhipuai",
+
+  endpoint: (profileId) => `/v1/zhipuai/${profileId}/chat/completions`,
+
+  headers: (wiremockStub) => ({
+    Authorization: `Bearer ${wiremockStub}`,
+    "Content-Type": "application/json",
+  }),
+
+  buildRequest: (content) => ({
+    model: "test-zhipuai-cost-limit",
+    messages: [{ role: "user", content }],
+  }),
+
+  modelName: "test-zhipuai-cost-limit",
+
+  // WireMock returns: prompt_tokens: 100, completion_tokens: 20
+  // Cost = (100 * 20000 + 20 * 30000) / 1,000,000 = $2.60
+  tokenPrice: {
+    provider: "zhipuai",
+    model: "test-zhipuai-cost-limit",
+    pricePerMillionInput: "20000.00",
+    pricePerMillionOutput: "30000.00",
+  },
+};
+
 // =============================================================================
 // Test Suite
 // =============================================================================
@@ -175,6 +202,7 @@ const testConfigs: TokenCostLimitTestConfig[] = [
   geminiConfig,
   vllmConfig,
   ollamaConfig,
+  zhipuaiConfig,
 ];
 
 for (const config of testConfigs) {

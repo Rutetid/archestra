@@ -6,13 +6,14 @@ import {
   TokenPriceModel,
 } from "@/models";
 import { getTokenizer } from "@/tokenizers";
-import type { Agent, Anthropic, Gemini, OpenAi, Vllm } from "@/types";
+import type { Agent, Anthropic, Gemini, OpenAi, Vllm, Zhipuai } from "@/types";
 
 type ProviderMessages = {
   openai: OpenAi.Types.ChatCompletionsRequest["messages"];
   anthropic: Anthropic.Types.MessagesRequest["messages"];
   gemini: Gemini.Types.GenerateContentRequest["contents"];
   vllm: Vllm.Types.ChatCompletionsRequest["messages"];
+  zhipuai: Zhipuai.Types.ChatCompletionsRequest["messages"];
 };
 
 /**
