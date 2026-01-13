@@ -1,6 +1,7 @@
 import type { SupportedProvider } from "@shared";
 import type { PartialUIMessage } from "@/components/chatbot-demo";
 import AnthropicMessagesInteraction from "./llmProviders/anthropic";
+import CerebrasChatCompletionInteraction from "./llmProviders/cerebras";
 import type {
   DualLlmResult,
   Interaction,
@@ -124,6 +125,9 @@ export class DynamicInteraction implements InteractionUtils {
       return new AnthropicMessagesInteraction(interaction);
     } else if (this.type === "zhipuai:chatCompletions") {
       return new ZhipuaiChatCompletionInteraction(interaction);
+    }
+    if (type === "cerebras:chatCompletions") {
+      return new CerebrasChatCompletionInteraction(interaction);
     }
     if (type === "vllm:chatCompletions") {
       return new VllmChatCompletionInteraction(interaction);

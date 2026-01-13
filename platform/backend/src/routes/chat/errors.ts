@@ -12,7 +12,7 @@ import {
   VllmErrorTypes,
   ZhipuaiErrorTypes,
 } from "@shared";
-import { APICallError } from "ai";
+import { APICallError, RetryError } from "ai";
 import logger from "@/logging";
 
 // =============================================================================
@@ -928,6 +928,7 @@ const providerParsers: Record<SupportedProvider, ErrorParser> = {
   openai: parseOpenAIError,
   anthropic: parseAnthropicError,
   gemini: parseGeminiError,
+  cerebras: parseOpenAIError, // Cerebras uses OpenAI-compatible API
   vllm: parseVllmError,
   ollama: parseOllamaError,
   zhipuai: parseZhipuaiError,
@@ -942,6 +943,7 @@ const providerMappers: Record<SupportedProvider, ErrorMapper> = {
   openai: mapOpenAIErrorWrapper,
   anthropic: mapAnthropicErrorWrapper,
   gemini: mapGeminiErrorWrapper,
+  cerebras: mapOpenAIErrorWrapper, // Cerebras uses OpenAI-compatible API
   vllm: mapVllmErrorWrapper,
   ollama: mapOllamaErrorWrapper,
   zhipuai: mapZhipuaiErrorWrapper,
@@ -1079,7 +1081,42 @@ export function mapProviderError(
   error: unknown,
   provider: SupportedProvider,
 ): ChatErrorResponse {
-  logger.debug({ error, provider }, "[ChatErrorMapper] Mapping provider error");
+  logger.debug({ provider }, "[ChatErrorMapper] Mapping provider error");
+
+  // Handle Vercel AI SDK RetryError - extract the lastError and map it
+  // RetryError wraps errors from retry attempts and contains the last underlying error
+  if (RetryError.isInstance(error)) {
+    const retryError = error as InstanceType<typeof RetryError>;
+    logger.debug(
+      {
+        provider,
+        reason: retryError.reason,
+        errorCount: retryError.errors?.length,
+        lastErrorType:
+          retryError.lastError instanceof Error
+            ? retryError.lastError.name
+            : typeof retryError.lastError,
+      },
+      "[ChatErrorMapper] Unwrapping RetryError to extract lastError",
+    );
+
+    // If we have a lastError, recursively map it to get the actual error details
+    if (retryError.lastError) {
+      const mappedLastError = mapProviderError(retryError.lastError, provider);
+      // Preserve the retry context in the message
+      const originalMessage =
+        mappedLastError.originalError?.message || "Unknown error";
+      return {
+        ...mappedLastError,
+        originalError: mappedLastError.originalError
+          ? {
+              ...mappedLastError.originalError,
+              message: `Failed after ${retryError.errors?.length || "multiple"} attempts. Last error: ${originalMessage}`,
+            }
+          : undefined,
+      };
+    }
+  }
 
   // Get provider-specific parser and mapper
   const parseError = providerParsers[provider];
