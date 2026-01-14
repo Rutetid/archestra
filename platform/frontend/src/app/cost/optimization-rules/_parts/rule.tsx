@@ -49,15 +49,6 @@ function sortModelsByPrice(tokenPrices: TokenPrices): TokenPrices {
   });
 }
 
-const _providerDictionary: Record<SupportedProvider, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  gemini: "Gemini",
-  vllm: "vLLM",
-  ollama: "Ollama",
-  zhipuai: "Zhipu AI",
-};
-
 // Helper to get entity display name
 function getEntityName(
   entityType: EntityType,

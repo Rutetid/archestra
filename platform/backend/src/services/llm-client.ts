@@ -249,7 +249,7 @@ export function createLLMModel(params: {
       headers,
     });
     // Use .chat() to force Chat Completions API
-     return client.chat(modelName);
+    return client.chat(modelName);
   }
 
   if (provider === "zhipuai") {
