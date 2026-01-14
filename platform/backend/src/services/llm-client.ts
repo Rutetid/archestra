@@ -243,12 +243,13 @@ export function createLLMModel(params: {
   if (provider === "ollama") {
     // URL format: /v1/ollama/:agentId (SDK appends /chat/completions)
     // Ollama uses OpenAI-compatible API, so we use the OpenAI SDK
-    const _client = createOpenAI({
+    const client = createOpenAI({
       apiKey: apiKey || "EMPTY", // Ollama typically doesn't require API keys
       baseURL: `http://localhost:${config.api.port}/v1/ollama/${agentId}`,
       headers,
     });
     // Use .chat() to force Chat Completions API
+     return client.chat(modelName);
   }
 
   if (provider === "zhipuai") {
