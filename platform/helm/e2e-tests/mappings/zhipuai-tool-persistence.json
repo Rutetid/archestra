@@ -6,15 +6,7 @@
       "Authorization": {
         "contains": "zhipuai-tool-persistence"
       }
-    },
-    "bodyPatterns": [
-      {
-        "contains": "glm-4.5-flash"
-      },
-      {
-        "contains": "tools"
-      }
-    ]
+    }
   },
   "response": {
     "status": 200,

@@ -4,12 +4,12 @@
     "urlPath": "/zhipuai/v4/chat/completions",
     "headers": {
       "Authorization": {
-        "contains": "zhipuai-compression-enabled"
+        "contains": "zhipuai-compression"
       }
     },
     "bodyPatterns": [
       {
-        "contains": "glm-4.5-flash"
+        "contains": "files[5]{name,size,type}"
       }
     ]
   },

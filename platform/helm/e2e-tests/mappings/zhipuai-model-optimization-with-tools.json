@@ -9,10 +9,7 @@
     },
     "bodyPatterns": [
       {
-        "contains": "e2e-test-zhipuai-baseline"
-      },
-      {
-        "contains": "tools"
+        "contains": "e2e-test-zhipuai-optimized"
       }
     ]
   },

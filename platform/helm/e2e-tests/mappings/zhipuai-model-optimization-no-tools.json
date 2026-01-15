@@ -9,10 +9,7 @@
     },
     "bodyPatterns": [
       {
-        "contains": "e2e-test-zhipuai-optimized"
-      },
-      {
-        "doesNotMatch": ".*tools.*"
+        "contains": "e2e-test-zhipuai-baseline"
       }
     ]
   },
@@ -25,7 +22,7 @@
       "id": "20260114011737450622882b094142",
       "object": "chat.completion",
       "created": 1768324666,
-      "model": "e2e-test-zhipuai-optimized",
+      "model": "e2e-test-zhipuai-baseline",
       "choices": [
         {
           "index": 0,

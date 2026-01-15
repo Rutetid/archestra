@@ -4,12 +4,12 @@
     "urlPath": "/zhipuai/v4/chat/completions",
     "headers": {
       "Authorization": {
-        "contains": "zhipuai-compression-disabled"
+        "contains": "zhipuai-compression"
       }
     },
     "bodyPatterns": [
       {
-        "contains": "glm-4.5-flash"
+        "contains": "{\\\"files\\\":[{\\\"name\\\":\\\"README.md\\\",\\\"size\\\":1024"
       }
     ]
   },

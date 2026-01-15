@@ -4,14 +4,9 @@
     "urlPath": "/zhipuai/v4/chat/completions",
     "headers": {
       "Authorization": {
-        "contains": "zhipuai-token-cost-limit"
+        "contains": "zhipuai-token-cost-limit-test"
       }
-    },
-    "bodyPatterns": [
-      {
-        "contains": "test-zhipuai-cost-limit"
-      }
-    ]
+    }
   },
   "response": {
     "status": 200,
