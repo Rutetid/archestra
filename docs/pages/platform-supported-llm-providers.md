@@ -301,8 +301,8 @@ You can get an API key from the [Mistral AI Console](https://console.mistral.ai/
 
 ### Important Notes
 
-- **OpenAI-compatible API**: MiniMax's API follows the OpenAI Chat Completions format for easy integration
-- **Chain-of-thought reasoning**: MiniMax models support thinking tags (`<think>`) that show the model's reasoning process before providing the final answer
+- **OpenAI-compatible API (text-only)**: MiniMax's API follows the OpenAI Chat Completions format for easy integration. The integration uses text-only messages (no image or multimodal content support).
+- **Reasoning metadata**: MiniMax models support extended thinking through the `reasoning_details` field in responses, which contains the model's reasoning process as structured data (not as `<think>` tags in the message content).
 - **API Key**: Obtain your API key from the [MiniMax Platform](https://www.minimax.io/)
 - **No /models endpoint**: MiniMax does not provide a models listing API. Available models are hardcoded in the platform configuration
 - **Chinese and English support**: MiniMax models excel at both Chinese and English language tasks

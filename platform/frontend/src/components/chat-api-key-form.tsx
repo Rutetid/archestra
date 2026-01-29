@@ -144,7 +144,7 @@ const PROVIDER_CONFIG: Record<
     icon: "/icons/minimax.png",
     placeholder: "sk-...",
     enabled: true,
-    consoleUrl: "https://www.minimaxi.com/",
+    consoleUrl: "https://www.minimax.io/",
     consoleName: "MiniMax Platform",
   },
 } as const;

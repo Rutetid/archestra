@@ -126,12 +126,18 @@ class MinimaxChatCompletionInteraction implements InteractionUtils {
         }
 
         for (const toolCall of toolCalls) {
+          let parsedArguments: unknown;
+          try {
+            parsedArguments = JSON.parse(toolCall.function.arguments);
+          } catch {
+            parsedArguments = toolCall.function.arguments || {};
+          }
           parts.push({
             type: "dynamic-tool",
             toolName: toolCall.function.name,
             toolCallId: toolCall.id,
             state: "input-available",
-            input: JSON.parse(toolCall.function.arguments),
+            input: parsedArguments,
           });
         }
       }
