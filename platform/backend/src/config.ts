@@ -472,7 +472,6 @@ export default {
         process.env.ARCHESTRA_BEDROCK_INFERENCE_PROFILE_PREFIX || "",
     },
     minimax: {
-      enabled: true, // Always enabled with default base URL
       baseUrl:
         process.env.ARCHESTRA_MINIMAX_BASE_URL || "https://api.minimax.io/v1",
     },

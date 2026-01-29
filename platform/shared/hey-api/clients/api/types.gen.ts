@@ -3082,6 +3082,136 @@ export type ZhipuaiChatCompletionResponseInput = {
     }>;
 };
 
+export type MinimaxChatCompletionRequestInput = {
+    model: string;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    messages: Array<{
+        role: 'system';
+        content: string;
+        name?: string;
+    } | {
+        role: 'user';
+        content: string;
+        name?: string;
+    } | {
+        role: 'assistant';
+        content?: string | unknown;
+        name?: string;
+        reasoning_details?: Array<{
+            text: string;
+        }>;
+        tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            /**
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             */
+            function: {
+                arguments: string;
+                name: string;
+            };
+        }>;
+    } | {
+        role: 'tool';
+        content: string;
+        tool_call_id: string;
+    }>;
+    tools?: Array<{
+        type: 'function';
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api
+         */
+        function: {
+            name: string;
+            description?: string;
+            /**
+             *
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             *
+             * The parameters the functions accepts, described as a JSON Schema object. See the
+             * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
+             * documentation about the format.
+             *
+             * Omitting parameters defines a function with an empty parameter list.
+             *
+             */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            strict?: boolean | unknown;
+        };
+    }>;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    tool_choice?: 'auto' | 'none' | 'required' | {
+        type: 'function';
+        function: {
+            name: string;
+        };
+    };
+    stream?: boolean;
+    temperature?: number | unknown;
+    top_p?: number | unknown;
+    max_tokens?: number | unknown;
+    n?: number;
+    stop?: string | Array<string>;
+    response_format?: {
+        type: 'text' | 'json_object';
+    };
+    user?: string;
+    extra_body?: {
+        reasoning_split?: boolean;
+    };
+};
+
+export type MinimaxChatCompletionResponseInput = {
+    id: string;
+    choices: Array<{
+        finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+        index: number;
+        logprobs?: unknown;
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api#response
+         */
+        message: {
+            content: string | unknown;
+            role: 'assistant';
+            reasoning_details?: Array<{
+                text: string;
+            }>;
+            tool_calls?: Array<{
+                id: string;
+                type: 'function';
+                /**
+                 * https://platform.minimax.io/docs/api-reference/text-openai-api
+                 */
+                function: {
+                    arguments: string;
+                    name: string;
+                };
+            }>;
+        };
+    }>;
+    created: number;
+    model: string;
+    object: 'chat.completion';
+    system_fingerprint?: string | unknown;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api#usage
+     */
+    usage?: {
+        completion_tokens: number;
+        prompt_tokens: number;
+        total_tokens: number;
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
+};
+
 export type OpenAiChatCompletionRequest = {
     model: string;
     /**
@@ -6158,6 +6288,136 @@ export type ZhipuaiChatCompletionResponse = {
         refer: string;
         publish_date: string;
     }>;
+};
+
+export type MinimaxChatCompletionRequest = {
+    model: string;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    messages: Array<{
+        role: 'system';
+        content: string;
+        name?: string;
+    } | {
+        role: 'user';
+        content: string;
+        name?: string;
+    } | {
+        role: 'assistant';
+        content?: string | unknown;
+        name?: string;
+        reasoning_details?: Array<{
+            text: string;
+        }>;
+        tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            /**
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             */
+            function: {
+                arguments: string;
+                name: string;
+            };
+        }>;
+    } | {
+        role: 'tool';
+        content: string;
+        tool_call_id: string;
+    }>;
+    tools?: Array<{
+        type: 'function';
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api
+         */
+        function: {
+            name: string;
+            description?: string;
+            /**
+             *
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             *
+             * The parameters the functions accepts, described as a JSON Schema object. See the
+             * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
+             * documentation about the format.
+             *
+             * Omitting parameters defines a function with an empty parameter list.
+             *
+             */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            strict?: boolean | unknown;
+        };
+    }>;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    tool_choice?: 'auto' | 'none' | 'required' | {
+        type: 'function';
+        function: {
+            name: string;
+        };
+    };
+    stream?: boolean;
+    temperature?: number | unknown;
+    top_p?: number | unknown;
+    max_tokens?: number | unknown;
+    n?: number;
+    stop?: string | Array<string>;
+    response_format?: {
+        type: 'text' | 'json_object';
+    };
+    user?: string;
+    extra_body?: {
+        reasoning_split?: boolean;
+    };
+};
+
+export type MinimaxChatCompletionResponse = {
+    id: string;
+    choices: Array<{
+        finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+        index: number;
+        logprobs?: unknown;
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api#response
+         */
+        message: {
+            content: string | unknown;
+            role: 'assistant';
+            reasoning_details?: Array<{
+                text: string;
+            }>;
+            tool_calls?: Array<{
+                id: string;
+                type: 'function';
+                /**
+                 * https://platform.minimax.io/docs/api-reference/text-openai-api
+                 */
+                function: {
+                    arguments: string;
+                    name: string;
+                };
+            }>;
+        };
+    }>;
+    created: number;
+    model: string;
+    object: 'chat.completion';
+    system_fingerprint?: string | unknown;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api#usage
+     */
+    usage?: {
+        completion_tokens: number;
+        prompt_tokens: number;
+        total_tokens: number;
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
 };
 
 export type GetHealthData = {

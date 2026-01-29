@@ -1011,8 +1011,8 @@ export class MinimaxDualLlmClient implements DualLlmClient {
   private client: OpenAI;
   private model: string;
 
-  // Default to a common MiniMax chat model; callers can override via factory
-  constructor(apiKey: string, model = "abab6.5-chat") {
+  // Default to MiniMax-M2.1 for cost-effective verification; callers can override via factory
+  constructor(apiKey: string, model = "MiniMax-M2.1") {
     logger.debug({ model }, "[dualLlmClient] MiniMax: initializing client");
     this.client = new OpenAI({
       apiKey,

@@ -80,7 +80,7 @@ const featuresRoutes: FastifyPluginAsyncZod = async (fastify) => {
         vllmEnabled: config.llm.vllm.enabled,
         ollamaEnabled: config.llm.ollama.enabled,
         mistralEnabled: true, // Mistral is always enabled (has default base URL)
-        minimaxEnabled: config.llm.minimax.enabled,
+        minimaxEnabled: Boolean(process.env.ARCHESTRA_MINIMAX_BASE_URL),
         globalToolPolicy,
         incomingEmail: getEmailProviderInfo(),
         knowledgeGraph: getKnowledgeGraphProviderInfo(),

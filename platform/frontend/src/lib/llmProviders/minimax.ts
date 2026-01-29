@@ -112,19 +112,18 @@ class MinimaxChatCompletionInteraction implements InteractionUtils {
     const { content, role } = message;
 
     if (role === "assistant") {
-      const { tool_calls: toolCalls } = message;
-
-      if (toolCalls) {
-        if (typeof content === "string" && content) {
-          parts.push({ type: "text", text: content });
-        } else if (Array.isArray(content)) {
-          for (const part of content) {
-            if ("type" in part && part.type === "text" && "text" in part) {
-              parts.push({ type: "text", text: part.text });
-            }
+      if (typeof content === "string" && content) {
+        parts.push({ type: "text", text: content });
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if ("type" in part && part.type === "text" && "text" in part) {
+            parts.push({ type: "text", text: part.text });
           }
         }
+      }
 
+      const { tool_calls: toolCalls } = message;
+      if (toolCalls) {
         for (const toolCall of toolCalls) {
           let parsedArguments: unknown;
           try {

@@ -16,66 +16,63 @@ const minimaxProxyRoutesV2: FastifyPluginAsyncZod = async (fastify) => {
 
   logger.info("[UnifiedProxy] Registering unified MiniMax routes");
 
-  // Register HTTP proxy only if MiniMax is configured
-  if (config.llm.minimax.enabled) {
-    await fastify.register(fastifyHttpProxy, {
-      upstream: config.llm.minimax.baseUrl as string,
-      prefix: API_PREFIX,
-      rewritePrefix: "",
-      preHandler: (request, _reply, next) => {
-        if (
-          request.method === "POST" &&
-          request.url.includes(CHAT_COMPLETIONS_SUFFIX)
-        ) {
-          logger.info(
-            {
-              method: request.method,
-              url: request.url,
-              action: "skip-proxy",
-              reason: "handled-by-custom-handler",
-            },
-            "MiniMax proxy preHandler: skipping chat/completions route",
-          );
-          next(new Error("skip"));
-          return;
-        }
-
-        const pathAfterPrefix = request.url.replace(API_PREFIX, "");
-        const uuidMatch = pathAfterPrefix.match(
-          /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/.*)?$/i,
+  await fastify.register(fastifyHttpProxy, {
+    upstream: config.llm.minimax.baseUrl as string,
+    prefix: API_PREFIX,
+    rewritePrefix: "",
+    preHandler: (request, _reply, next) => {
+      if (
+        request.method === "POST" &&
+        request.url.includes(CHAT_COMPLETIONS_SUFFIX)
+      ) {
+        logger.info(
+          {
+            method: request.method,
+            url: request.url,
+            action: "skip-proxy",
+            reason: "handled-by-custom-handler",
+          },
+          "MiniMax proxy preHandler: skipping chat/completions route",
         );
+        next(new Error("skip"));
+        return;
+      }
 
-        if (uuidMatch) {
-          const remainingPath = uuidMatch[2] || "";
-          const originalUrl = request.raw.url;
-          request.raw.url = `${API_PREFIX}${remainingPath}`;
+      const pathAfterPrefix = request.url.replace(API_PREFIX, "");
+      const uuidMatch = pathAfterPrefix.match(
+        /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/.*)?$/i,
+      );
 
-          logger.info(
-            {
-              method: request.method,
-              originalUrl,
-              rewrittenUrl: request.raw.url,
-              upstream: config.llm.minimax.baseUrl,
-              finalProxyUrl: `${config.llm.minimax.baseUrl}${remainingPath}`,
-            },
-            "MiniMax proxy preHandler: URL rewritten (UUID stripped)",
-          );
-        } else {
-          logger.info(
-            {
-              method: request.method,
-              url: request.url,
-              upstream: config.llm.minimax.baseUrl,
-              finalProxyUrl: `${config.llm.minimax.baseUrl}${pathAfterPrefix}`,
-            },
-            "MiniMax proxy preHandler: proxying request",
-          );
-        }
+      if (uuidMatch) {
+        const remainingPath = uuidMatch[2] || "";
+        const originalUrl = request.raw.url;
+        request.raw.url = `${API_PREFIX}${remainingPath}`;
 
-        next();
-      },
-    });
-  }
+        logger.info(
+          {
+            method: request.method,
+            originalUrl,
+            rewrittenUrl: request.raw.url,
+            upstream: config.llm.minimax.baseUrl,
+            finalProxyUrl: `${config.llm.minimax.baseUrl}${remainingPath}`,
+          },
+          "MiniMax proxy preHandler: URL rewritten (UUID stripped)",
+        );
+      } else {
+        logger.info(
+          {
+            method: request.method,
+            url: request.url,
+            upstream: config.llm.minimax.baseUrl,
+            finalProxyUrl: `${config.llm.minimax.baseUrl}${pathAfterPrefix}`,
+          },
+          "MiniMax proxy preHandler: proxying request",
+        );
+      }
+
+      next();
+    },
+  });
 
   fastify.post(
     `${API_PREFIX}${CHAT_COMPLETIONS_SUFFIX}`,
@@ -94,17 +91,6 @@ const minimaxProxyRoutesV2: FastifyPluginAsyncZod = async (fastify) => {
       },
     },
     async (request, reply) => {
-      // Runtime check for provider configuration
-      if (!config.llm.minimax.enabled) {
-        return reply.status(500).send({
-          error: {
-            message:
-              "MiniMax is not configured. Set ARCHESTRA_MINIMAX_BASE_URL to enable.",
-            type: "api_internal_server_error",
-          },
-        });
-      }
-
       logger.debug(
         { url: request.url },
         "[UnifiedProxy] Handling MiniMax request (default agent)",
@@ -148,17 +134,6 @@ const minimaxProxyRoutesV2: FastifyPluginAsyncZod = async (fastify) => {
       },
     },
     async (request, reply) => {
-      // Runtime check for provider configuration
-      if (!config.llm.minimax.enabled) {
-        return reply.status(500).send({
-          error: {
-            message:
-              "MiniMax is not configured. Set ARCHESTRA_MINIMAX_BASE_URL to enable.",
-            type: "api_internal_server_error",
-          },
-        });
-      }
-
       logger.debug(
         { url: request.url, agentId: request.params.agentId },
         "[UnifiedProxy] Handling MiniMax request (with agent)",
