@@ -68,7 +68,7 @@ export const ChatCompletionRequestSchema = z
      * Temperature range: (0.0, 1.0] (exclusive of 0.0)
      * Recommended value: 1.0
      */
-    temperature: z.number().min(0).max(1).nullable().optional(),
+    temperature: z.number().gt(0).max(1).nullable().optional(),
     top_p: z.number().min(0).max(1).nullable().optional(),
     max_tokens: z.number().nullable().optional(),
     /**

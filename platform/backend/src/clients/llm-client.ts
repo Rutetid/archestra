@@ -323,13 +323,13 @@ const directModelCreators: Record<SupportedChatProvider, DirectModelCreator> = {
     if (!apiKey) {
       throw new ApiError(
         400,
-        "MiniMax API key is required. Please configure MINIMAX_API_KEY.",
+        "MiniMax API key is required. Please configure ARCHESTRA_CHAT_MINIMAX_API_KEY.",
       );
     }
     // MiniMax uses OpenAI-compatible API
     const client = createOpenAI({
       apiKey,
-      baseURL: config.llm.minimax.baseUrl,
+      baseURL: config.chat.minimax.baseUrl,
     });
     return client(modelName);
   },
