@@ -2,6 +2,7 @@ import type {
   Anthropic,
   Cohere,
   Gemini,
+  Minimax,
   Ollama,
   OpenAi,
   Vllm,
@@ -15,7 +16,8 @@ export type ProviderMessage =
   | Gemini.Types.GenerateContentRequest["contents"][number]
   | Vllm.Types.ChatCompletionsRequest["messages"][number]
   | Ollama.Types.ChatCompletionsRequest["messages"][number]
-  | Zhipuai.Types.ChatCompletionsRequest["messages"][number];
+  | Zhipuai.Types.ChatCompletionsRequest["messages"][number]
+  | Minimax.Types.ChatCompletionsRequest["messages"][number];
 
 /**
  * Base interface for tokenizers

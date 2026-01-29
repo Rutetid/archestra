@@ -471,6 +471,11 @@ export default {
       inferenceProfilePrefix:
         process.env.ARCHESTRA_BEDROCK_INFERENCE_PROFILE_PREFIX || "",
     },
+    minimax: {
+      enabled: true, // Always enabled with default base URL
+      baseUrl:
+        process.env.ARCHESTRA_MINIMAX_BASE_URL || "https://api.minimax.io/v1",
+    },
   },
   chat: {
     openai: {
@@ -502,6 +507,12 @@ export default {
     },
     bedrock: {
       apiKey: process.env.ARCHESTRA_CHAT_BEDROCK_API_KEY || "",
+    },
+    minimax: {
+      apiKey: process.env.ARCHESTRA_CHAT_MINIMAX_API_KEY || "",
+      baseUrl:
+        process.env.ARCHESTRA_CHAT_MINIMAX_BASE_URL ||
+        "https://api.minimax.io/v1",
     },
     mcp: {
       remoteServerUrl: process.env.ARCHESTRA_CHAT_MCP_SERVER_URL || "",

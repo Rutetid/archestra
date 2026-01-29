@@ -41784,7 +41784,8 @@
                           "openai",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "secretId": {
@@ -42105,7 +42106,8 @@
                       "openai",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "apiKey": {
@@ -42173,7 +42175,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "secretId": {
@@ -42462,7 +42465,8 @@
                 "openai",
                 "vllm",
                 "ollama",
-                "zhipuai"
+                "zhipuai",
+                "minimax"
               ]
             },
             "in": "query",
@@ -42503,7 +42507,8 @@
                           "openai",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "secretId": {
@@ -42847,7 +42852,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "secretId": {
@@ -43229,7 +43235,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "secretId": {
@@ -43768,7 +43775,8 @@
                 "openai",
                 "vllm",
                 "ollama",
-                "zhipuai"
+                "zhipuai",
+                "minimax"
               ]
             },
             "in": "query",
@@ -43804,7 +43812,8 @@
                           "openai",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "createdAt": {
@@ -44370,7 +44379,8 @@
                           "mistral",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "modelId": {
@@ -45095,7 +45105,8 @@
                           "openai",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "hasCustomToolSelection": {
@@ -45492,7 +45503,8 @@
                       "openai",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "chatApiKeyId": {
@@ -45560,7 +45572,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -45990,7 +46003,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -46381,7 +46395,8 @@
                       "openai",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "chatApiKeyId": {
@@ -46466,7 +46481,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -47686,7 +47702,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -48144,7 +48161,8 @@
                         "openai",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -53089,6 +53107,9 @@
                     "mistralEnabled": {
                       "type": "boolean"
                     },
+                    "minimaxEnabled": {
+                      "type": "boolean"
+                    },
                     "globalToolPolicy": {
                       "type": "string",
                       "enum": [
@@ -53159,6 +53180,7 @@
                     "vllmEnabled",
                     "ollamaEnabled",
                     "mistralEnabled",
+                    "minimaxEnabled",
                     "globalToolPolicy",
                     "browserStreamingEnabled",
                     "incomingEmail",
@@ -58842,6 +58864,132 @@
                               "createdAt"
                             ],
                             "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "profileId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "externalAgentId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "userId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "sessionId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "sessionSource": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "request": {
+                                "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                              },
+                              "processedRequest": {
+                                "nullable": true,
+                                "allOf": [
+                                  {
+                                    "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                                  }
+                                ]
+                              },
+                              "response": {
+                                "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "minimax:chatCompletions"
+                                ]
+                              },
+                              "model": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "baselineModel": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "inputTokens": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "outputTokens": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "baselineCost": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "cost": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "toonTokensBefore": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "toonTokensAfter": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "toonCostSavings": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "toonSkipReason": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "profileId",
+                              "externalAgentId",
+                              "userId",
+                              "sessionId",
+                              "sessionSource",
+                              "request",
+                              "response",
+                              "type",
+                              "model",
+                              "baselineModel",
+                              "inputTokens",
+                              "outputTokens",
+                              "baselineCost",
+                              "cost",
+                              "toonTokensBefore",
+                              "toonTokensAfter",
+                              "toonCostSavings",
+                              "toonSkipReason",
+                              "createdAt"
+                            ],
+                            "additionalProperties": false
                           }
                         ]
                       }
@@ -63158,6 +63306,132 @@
                         "externalAgentIdLabel": {
                           "nullable": true,
                           "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "profileId",
+                        "externalAgentId",
+                        "userId",
+                        "sessionId",
+                        "sessionSource",
+                        "request",
+                        "response",
+                        "type",
+                        "model",
+                        "baselineModel",
+                        "inputTokens",
+                        "outputTokens",
+                        "baselineCost",
+                        "cost",
+                        "toonTokensBefore",
+                        "toonTokensAfter",
+                        "toonCostSavings",
+                        "toonSkipReason",
+                        "createdAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "profileId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "externalAgentId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "userId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "sessionSource": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "request": {
+                          "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                        },
+                        "processedRequest": {
+                          "nullable": true,
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                            }
+                          ]
+                        },
+                        "response": {
+                          "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "minimax:chatCompletions"
+                          ]
+                        },
+                        "model": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "baselineModel": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "inputTokens": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "outputTokens": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "baselineCost": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "cost": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "toonTokensBefore": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "toonTokensAfter": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "toonCostSavings": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "toonSkipReason": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
                         }
                       },
                       "required": [
@@ -78972,6 +79246,516 @@
         }
       }
     },
+    "/v1/minimax/chat/completions": {
+      "post": {
+        "operationId": "minimaxChatCompletionsWithDefaultAgent",
+        "tags": [
+          "llm-proxy"
+        ],
+        "description": "Create a chat completion with MiniMax (uses default agent)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinimaxChatCompletionRequestInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "header",
+            "name": "authorization",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_validation_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authentication_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authorization_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_not_found_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_conflict_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_internal_server_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/minimax/{agentId}/chat/completions": {
+      "post": {
+        "operationId": "minimaxChatCompletionsWithAgent",
+        "tags": [
+          "llm-proxy"
+        ],
+        "description": "Create a chat completion with MiniMax for a specific agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinimaxChatCompletionRequestInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$"
+            },
+            "in": "path",
+            "name": "agentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "header",
+            "name": "authorization",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_validation_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authentication_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authorization_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_not_found_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_conflict_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_internal_server_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/mistral/chat/completions": {
       "post": {
         "operationId": "mistralChatCompletionsWithDefaultAgent",
@@ -81198,7 +81982,8 @@
                           "mistral",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "targetModel": {
@@ -81516,7 +82301,8 @@
                       "mistral",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "targetModel": {
@@ -81609,7 +82395,8 @@
                         "mistral",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "targetModel": {
@@ -81928,7 +82715,8 @@
                       "mistral",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "targetModel": {
@@ -82025,7 +82813,8 @@
                         "mistral",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "targetModel": {
@@ -91405,7 +92194,8 @@
                           "mistral",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "model": {
@@ -91678,7 +92468,8 @@
                       "mistral",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "model": {
@@ -91728,7 +92519,8 @@
                         "mistral",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "model": {
@@ -92021,7 +92813,8 @@
                         "mistral",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "model": {
@@ -92293,7 +93086,8 @@
                       "mistral",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "model": {
@@ -92348,7 +93142,8 @@
                         "mistral",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "model": {

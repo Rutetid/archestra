@@ -12,6 +12,7 @@ import type {
   Cerebras,
   Cohere,
   Gemini,
+  Minimax,
   Mistral,
   OpenAi,
   Vllm,
@@ -24,6 +25,7 @@ type ProviderMessages = {
   cohere: Cohere.Types.ChatRequest["messages"];
   gemini: Gemini.Types.GenerateContentRequest["contents"];
   mistral: Mistral.Types.ChatCompletionsRequest["messages"];
+  minimax: Minimax.Types.ChatCompletionsRequest["messages"];
   openai: OpenAi.Types.ChatCompletionsRequest["messages"];
   vllm: Vllm.Types.ChatCompletionsRequest["messages"];
   ollama: Vllm.Types.ChatCompletionsRequest["messages"];

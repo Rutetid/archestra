@@ -273,6 +273,40 @@ You can get an API key from the [Mistral AI Console](https://console.mistral.ai/
 - **Free tier available**: The GLM-4.5-Flash model is available on the free tier for testing and development
 - **Chinese language support**: GLM models excel at Chinese language understanding and generation, while maintaining strong English capabilities
 
+## MiniMax
+
+[MiniMax](https://www.minimax.io/) is a Chinese AI company offering advanced large language models with strong reasoning capabilities. The platform provides the MiniMax-M2 series with chain-of-thought reasoning capabilities and support for text, images, and multi-turn conversations.
+
+### Supported MiniMax APIs
+
+- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+
+### MiniMax Connection Details
+
+- **Base URL**: `http://localhost:9000/v1/minimax/{profile-id}`
+- **Authentication**: Pass your MiniMax API key in the `Authorization` header as `Bearer <your-api-key>`
+
+### Environment Variables
+
+| Variable                          | Required | Description                                                                    |
+| --------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `ARCHESTRA_CHAT_MINIMAX_API_KEY`  | No       | Default API key for MiniMax (can be overridden per conversation/team/org)     |
+| `ARCHESTRA_CHAT_MINIMAX_BASE_URL` | No       | MiniMax API base URL (default: `https://api.minimax.io/v1`)                   |
+
+### Available Models
+
+- **MiniMax-M2** - Base model with strong reasoning capabilities
+- **MiniMax-M2.1** - Enhanced model with improved performance
+- **MiniMax-M2.1-lightning** - Fast inference model optimized for speed
+
+### Important Notes
+
+- **OpenAI-compatible API**: MiniMax's API follows the OpenAI Chat Completions format for easy integration
+- **Chain-of-thought reasoning**: MiniMax models support thinking tags (`<think>`) that show the model's reasoning process before providing the final answer
+- **API Key**: Obtain your API key from the [MiniMax Platform](https://www.minimax.io/)
+- **No /models endpoint**: MiniMax does not provide a models listing API. Available models are hardcoded in the platform configuration
+- **Chinese and English support**: MiniMax models excel at both Chinese and English language tasks
+
 ## Amazon Bedrock
 
 ### Supported Bedrock APIs
