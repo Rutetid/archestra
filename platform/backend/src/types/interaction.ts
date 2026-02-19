@@ -8,6 +8,7 @@ import {
   Cerebras,
   Cohere,
   Gemini,
+  Minimax,
   Mistral,
   Ollama,
   OpenAi,
@@ -36,6 +37,7 @@ export const InteractionRequestSchema = z.union([
   Ollama.API.ChatCompletionRequestSchema,
   Cohere.API.ChatRequestSchema,
   Zhipuai.API.ChatCompletionRequestSchema,
+  Minimax.API.ChatCompletionRequestSchema,
 ]);
 
 export const InteractionResponseSchema = z.union([
@@ -49,6 +51,7 @@ export const InteractionResponseSchema = z.union([
   Ollama.API.ChatCompletionResponseSchema,
   Cohere.API.ChatResponseSchema,
   Zhipuai.API.ChatCompletionResponseSchema,
+  Minimax.API.ChatCompletionResponseSchema,
 ]);
 
 /**
@@ -161,6 +164,13 @@ export const SelectInteractionSchema = z.discriminatedUnion("type", [
     requestType: RequestTypeSchema.optional(),
     /** Resolved prompt name if externalAgentId matches a prompt ID */
     externalAgentIdLabel: z.string().nullable().optional(),
+  }),
+  BaseSelectInteractionSchema.extend({
+    type: z.enum(["minimax:chatCompletions"]),
+    request: Minimax.API.ChatCompletionRequestSchema,
+    processedRequest:
+      Minimax.API.ChatCompletionRequestSchema.nullable().optional(),
+    response: Minimax.API.ChatCompletionResponseSchema,
   }),
 ]);
 

@@ -3082,6 +3082,136 @@ export type ZhipuaiChatCompletionResponseInput = {
     }>;
 };
 
+export type MinimaxChatCompletionRequestInput = {
+    model: string;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    messages: Array<{
+        role: 'system';
+        content: string;
+        name?: string;
+    } | {
+        role: 'user';
+        content: string;
+        name?: string;
+    } | {
+        role: 'assistant';
+        content?: string | unknown;
+        name?: string;
+        reasoning_details?: Array<{
+            text: string;
+        }>;
+        tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            /**
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             */
+            function: {
+                arguments: string;
+                name: string;
+            };
+        }>;
+    } | {
+        role: 'tool';
+        content: string;
+        tool_call_id: string;
+    }>;
+    tools?: Array<{
+        type: 'function';
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api
+         */
+        function: {
+            name: string;
+            description?: string;
+            /**
+             *
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             *
+             * The parameters the functions accepts, described as a JSON Schema object. See the
+             * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
+             * documentation about the format.
+             *
+             * Omitting parameters defines a function with an empty parameter list.
+             *
+             */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            strict?: boolean | unknown;
+        };
+    }>;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    tool_choice?: 'auto' | 'none' | 'required' | {
+        type: 'function';
+        function: {
+            name: string;
+        };
+    };
+    stream?: boolean;
+    temperature?: number | unknown;
+    top_p?: number | unknown;
+    max_tokens?: number | unknown;
+    n?: number;
+    stop?: string | Array<string>;
+    response_format?: {
+        type: 'text' | 'json_object';
+    };
+    user?: string;
+    extra_body?: {
+        reasoning_split?: boolean;
+    };
+};
+
+export type MinimaxChatCompletionResponseInput = {
+    id: string;
+    choices: Array<{
+        finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+        index: number;
+        logprobs?: unknown;
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api#response
+         */
+        message: {
+            content: string | unknown;
+            role: 'assistant';
+            reasoning_details?: Array<{
+                text: string;
+            }>;
+            tool_calls?: Array<{
+                id: string;
+                type: 'function';
+                /**
+                 * https://platform.minimax.io/docs/api-reference/text-openai-api
+                 */
+                function: {
+                    arguments: string;
+                    name: string;
+                };
+            }>;
+        };
+    }>;
+    created: number;
+    model: string;
+    object: 'chat.completion';
+    system_fingerprint?: string | unknown;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api#usage
+     */
+    usage?: {
+        completion_tokens: number;
+        prompt_tokens: number;
+        total_tokens: number;
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
+};
+
 export type OpenAiChatCompletionRequest = {
     model: string;
     /**
@@ -6158,6 +6288,136 @@ export type ZhipuaiChatCompletionResponse = {
         refer: string;
         publish_date: string;
     }>;
+};
+
+export type MinimaxChatCompletionRequest = {
+    model: string;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    messages: Array<{
+        role: 'system';
+        content: string;
+        name?: string;
+    } | {
+        role: 'user';
+        content: string;
+        name?: string;
+    } | {
+        role: 'assistant';
+        content?: string | unknown;
+        name?: string;
+        reasoning_details?: Array<{
+            text: string;
+        }>;
+        tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            /**
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             */
+            function: {
+                arguments: string;
+                name: string;
+            };
+        }>;
+    } | {
+        role: 'tool';
+        content: string;
+        tool_call_id: string;
+    }>;
+    tools?: Array<{
+        type: 'function';
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api
+         */
+        function: {
+            name: string;
+            description?: string;
+            /**
+             *
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             *
+             * The parameters the functions accepts, described as a JSON Schema object. See the
+             * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
+             * documentation about the format.
+             *
+             * Omitting parameters defines a function with an empty parameter list.
+             *
+             */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            strict?: boolean | unknown;
+        };
+    }>;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    tool_choice?: 'auto' | 'none' | 'required' | {
+        type: 'function';
+        function: {
+            name: string;
+        };
+    };
+    stream?: boolean;
+    temperature?: number | unknown;
+    top_p?: number | unknown;
+    max_tokens?: number | unknown;
+    n?: number;
+    stop?: string | Array<string>;
+    response_format?: {
+        type: 'text' | 'json_object';
+    };
+    user?: string;
+    extra_body?: {
+        reasoning_split?: boolean;
+    };
+};
+
+export type MinimaxChatCompletionResponse = {
+    id: string;
+    choices: Array<{
+        finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+        index: number;
+        logprobs?: unknown;
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api#response
+         */
+        message: {
+            content: string | unknown;
+            role: 'assistant';
+            reasoning_details?: Array<{
+                text: string;
+            }>;
+            tool_calls?: Array<{
+                id: string;
+                type: 'function';
+                /**
+                 * https://platform.minimax.io/docs/api-reference/text-openai-api
+                 */
+                function: {
+                    arguments: string;
+                    name: string;
+                };
+            }>;
+        };
+    }>;
+    created: number;
+    model: string;
+    object: 'chat.completion';
+    system_fingerprint?: string | unknown;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api#usage
+     */
+    usage?: {
+        completion_tokens: number;
+        prompt_tokens: number;
+        total_tokens: number;
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
 };
 
 export type GetHealthData = {
@@ -12063,7 +12323,7 @@ export type GetChatApiKeysResponses = {
         id: string;
         organizationId: string;
         name: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         secretId: string | null;
         scope: 'personal' | 'team' | 'org_wide';
         userId: string | null;
@@ -12086,7 +12346,7 @@ export type GetChatApiKeysResponse = GetChatApiKeysResponses[keyof GetChatApiKey
 export type CreateChatApiKeyData = {
     body: {
         name: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         apiKey?: string;
         scope?: 'personal' | 'team' | 'org_wide';
         teamId?: string;
@@ -12165,7 +12425,7 @@ export type CreateChatApiKeyResponses = {
         id: string;
         organizationId: string;
         name: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         secretId: string | null;
         scope: 'personal' | 'team' | 'org_wide';
         userId: string | null;
@@ -12182,7 +12442,7 @@ export type GetAvailableChatApiKeysData = {
     body?: never;
     path?: never;
     query?: {
-        provider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         includeKeyId?: string;
     };
     url: '/api/chat-api-keys/available';
@@ -12255,7 +12515,7 @@ export type GetAvailableChatApiKeysResponses = {
         id: string;
         organizationId: string;
         name: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         secretId: string | null;
         scope: 'personal' | 'team' | 'org_wide';
         userId: string | null;
@@ -12430,7 +12690,7 @@ export type GetChatApiKeyResponses = {
         id: string;
         organizationId: string;
         name: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         secretId: string | null;
         scope: 'personal' | 'team' | 'org_wide';
         userId: string | null;
@@ -12533,7 +12793,7 @@ export type UpdateChatApiKeyResponses = {
         id: string;
         organizationId: string;
         name: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         secretId: string | null;
         scope: 'personal' | 'team' | 'org_wide';
         userId: string | null;
@@ -12550,7 +12810,7 @@ export type GetChatModelsData = {
     body?: never;
     path?: never;
     query?: {
-        provider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
     };
     url: '/api/chat/models';
 };
@@ -12621,7 +12881,7 @@ export type GetChatModelsResponses = {
     200: Array<{
         id: string;
         displayName: string;
-        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         createdAt?: string;
         capabilities?: {
             contextLength: number | null;
@@ -12786,7 +13046,7 @@ export type GetModelsWithApiKeysResponses = {
     200: Array<{
         id: string;
         externalId: string;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         modelId: string;
         description: string | null;
         contextLength: number | null;
@@ -13049,7 +13309,7 @@ export type GetChatConversationsResponses = {
         chatApiKeyId: string | null;
         title: string | null;
         selectedModel: string;
-        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         hasCustomToolSelection: boolean;
         todoList: string | number | boolean | null | {
             [key: string]: unknown;
@@ -13076,7 +13336,7 @@ export type CreateChatConversationData = {
         agentId: string;
         title?: string | null;
         selectedModel?: string;
-        selectedProvider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         chatApiKeyId?: string | null;
     };
     path?: never;
@@ -13155,7 +13415,7 @@ export type CreateChatConversationResponses = {
         chatApiKeyId: string | null;
         title: string | null;
         selectedModel: string;
-        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         hasCustomToolSelection: boolean;
         todoList: string | number | boolean | null | {
             [key: string]: unknown;
@@ -13336,7 +13596,7 @@ export type GetChatConversationResponses = {
         chatApiKeyId: string | null;
         title: string | null;
         selectedModel: string;
-        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         hasCustomToolSelection: boolean;
         todoList: string | number | boolean | null | {
             [key: string]: unknown;
@@ -13362,7 +13622,7 @@ export type UpdateChatConversationData = {
     body?: {
         title?: string | null;
         selectedModel?: string;
-        selectedProvider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider?: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         chatApiKeyId?: string | null;
         agentId?: string;
         artifact?: string | null;
@@ -13445,7 +13705,7 @@ export type UpdateChatConversationResponses = {
         chatApiKeyId: string | null;
         title: string | null;
         selectedModel: string;
-        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         hasCustomToolSelection: boolean;
         todoList: string | number | boolean | null | {
             [key: string]: unknown;
@@ -13635,7 +13895,7 @@ export type GenerateChatConversationTitleResponses = {
         chatApiKeyId: string | null;
         title: string | null;
         selectedModel: string;
-        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         hasCustomToolSelection: boolean;
         todoList: string | number | boolean | null | {
             [key: string]: unknown;
@@ -13741,7 +14001,7 @@ export type UpdateChatMessageResponses = {
         chatApiKeyId: string | null;
         title: string | null;
         selectedModel: string;
-        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai';
+        selectedProvider: 'anthropic' | 'bedrock' | 'cerebras' | 'cohere' | 'gemini' | 'mistral' | 'openai' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         hasCustomToolSelection: boolean;
         todoList: string | number | boolean | null | {
             [key: string]: unknown;
@@ -15427,6 +15687,7 @@ export type GetFeaturesResponses = {
         vllmEnabled: boolean;
         ollamaEnabled: boolean;
         mistralEnabled: boolean;
+        minimaxEnabled: boolean;
         globalToolPolicy: 'permissive' | 'restrictive';
         browserStreamingEnabled: boolean;
         incomingEmail: {
@@ -16962,6 +17223,29 @@ export type GetInteractionsResponses = {
             createdAt: string;
             requestType?: 'main' | 'subagent';
             externalAgentIdLabel?: string | null;
+        } | {
+            id: string;
+            profileId: string;
+            externalAgentId: string | null;
+            executionId: string | null;
+            userId: string | null;
+            sessionId: string | null;
+            sessionSource: string | null;
+            request: MinimaxChatCompletionRequest;
+            processedRequest?: MinimaxChatCompletionRequest | null;
+            response: MinimaxChatCompletionResponse;
+            type: 'minimax:chatCompletions';
+            model: string | null;
+            baselineModel: string | null;
+            inputTokens: number | null;
+            outputTokens: number | null;
+            baselineCost: string | null;
+            cost: string | null;
+            toonTokensBefore: number | null;
+            toonTokensAfter: number | null;
+            toonCostSavings: string | null;
+            toonSkipReason: string | null;
+            createdAt: string;
         }>;
         pagination: {
             currentPage: number;
@@ -17958,6 +18242,29 @@ export type GetInteractionResponses = {
         createdAt: string;
         requestType?: 'main' | 'subagent';
         externalAgentIdLabel?: string | null;
+    } | {
+        id: string;
+        profileId: string;
+        externalAgentId: string | null;
+        executionId: string | null;
+        userId: string | null;
+        sessionId: string | null;
+        sessionSource: string | null;
+        request: MinimaxChatCompletionRequest;
+        processedRequest?: MinimaxChatCompletionRequest | null;
+        response: MinimaxChatCompletionResponse;
+        type: 'minimax:chatCompletions';
+        model: string | null;
+        baselineModel: string | null;
+        inputTokens: number | null;
+        outputTokens: number | null;
+        baselineCost: string | null;
+        cost: string | null;
+        toonTokensBefore: number | null;
+        toonTokensAfter: number | null;
+        toonCostSavings: string | null;
+        toonSkipReason: string | null;
+        createdAt: string;
     };
 };
 
@@ -22182,6 +22489,164 @@ export type GetMcpToolCallResponses = {
 
 export type GetMcpToolCallResponse = GetMcpToolCallResponses[keyof GetMcpToolCallResponses];
 
+export type MinimaxChatCompletionsWithDefaultAgentData = {
+    body?: MinimaxChatCompletionRequestInput;
+    headers?: {
+        authorization?: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/minimax/chat/completions';
+};
+
+export type MinimaxChatCompletionsWithDefaultAgentErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+        };
+    };
+};
+
+export type MinimaxChatCompletionsWithDefaultAgentError = MinimaxChatCompletionsWithDefaultAgentErrors[keyof MinimaxChatCompletionsWithDefaultAgentErrors];
+
+export type MinimaxChatCompletionsWithDefaultAgentResponses = {
+    /**
+     * Default Response
+     */
+    200: MinimaxChatCompletionResponse;
+};
+
+export type MinimaxChatCompletionsWithDefaultAgentResponse = MinimaxChatCompletionsWithDefaultAgentResponses[keyof MinimaxChatCompletionsWithDefaultAgentResponses];
+
+export type MinimaxChatCompletionsWithAgentData = {
+    body?: MinimaxChatCompletionRequestInput;
+    headers?: {
+        authorization?: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/v1/minimax/{agentId}/chat/completions';
+};
+
+export type MinimaxChatCompletionsWithAgentErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+        };
+    };
+};
+
+export type MinimaxChatCompletionsWithAgentError = MinimaxChatCompletionsWithAgentErrors[keyof MinimaxChatCompletionsWithAgentErrors];
+
+export type MinimaxChatCompletionsWithAgentResponses = {
+    /**
+     * Default Response
+     */
+    200: MinimaxChatCompletionResponse;
+};
+
+export type MinimaxChatCompletionsWithAgentResponse = MinimaxChatCompletionsWithAgentResponses[keyof MinimaxChatCompletionsWithAgentResponses];
+
 export type MistralChatCompletionsWithDefaultAgentData = {
     body?: MistralChatCompletionRequestInput;
     headers: {
@@ -22995,7 +23460,7 @@ export type GetOptimizationRulesResponses = {
         } | {
             hasTools: boolean;
         }>;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         targetModel: string;
         enabled: boolean;
         createdAt: string;
@@ -23015,7 +23480,7 @@ export type CreateOptimizationRuleData = {
         } | {
             hasTools: boolean;
         }>;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         targetModel: string;
         enabled?: boolean;
         createdAt?: unknown;
@@ -23098,7 +23563,7 @@ export type CreateOptimizationRuleResponses = {
         } | {
             hasTools: boolean;
         }>;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         targetModel: string;
         enabled: boolean;
         createdAt: string;
@@ -23197,7 +23662,7 @@ export type UpdateOptimizationRuleData = {
         } | {
             hasTools: boolean;
         }>;
-        provider?: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider?: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         targetModel?: string;
         enabled?: boolean;
         createdAt?: unknown;
@@ -23282,7 +23747,7 @@ export type UpdateOptimizationRuleResponses = {
         } | {
             hasTools: boolean;
         }>;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         targetModel: string;
         enabled: boolean;
         createdAt: string;
@@ -25878,7 +26343,7 @@ export type GetTokenPricesResponses = {
      */
     200: Array<{
         id: string;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         model: string;
         pricePerMillionInput: string;
         pricePerMillionOutput: string;
@@ -25891,7 +26356,7 @@ export type GetTokenPricesResponse = GetTokenPricesResponses[keyof GetTokenPrice
 
 export type CreateTokenPriceData = {
     body: {
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         model: string;
         pricePerMillionInput: string;
         pricePerMillionOutput: string;
@@ -25966,7 +26431,7 @@ export type CreateTokenPriceResponses = {
      */
     200: {
         id: string;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         model: string;
         pricePerMillionInput: string;
         pricePerMillionOutput: string;
@@ -26130,7 +26595,7 @@ export type GetTokenPriceResponses = {
      */
     200: {
         id: string;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         model: string;
         pricePerMillionInput: string;
         pricePerMillionOutput: string;
@@ -26143,7 +26608,7 @@ export type GetTokenPriceResponse = GetTokenPriceResponses[keyof GetTokenPriceRe
 
 export type UpdateTokenPriceData = {
     body?: {
-        provider?: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider?: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         model?: string;
         pricePerMillionInput?: string;
         pricePerMillionOutput?: string;
@@ -26220,7 +26685,7 @@ export type UpdateTokenPriceResponses = {
      */
     200: {
         id: string;
-        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai';
+        provider: 'openai' | 'gemini' | 'anthropic' | 'bedrock' | 'cohere' | 'cerebras' | 'mistral' | 'vllm' | 'ollama' | 'zhipuai' | 'minimax';
         model: string;
         pricePerMillionInput: string;
         pricePerMillionOutput: string;

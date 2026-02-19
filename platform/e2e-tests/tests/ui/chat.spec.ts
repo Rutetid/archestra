@@ -114,6 +114,16 @@ const zhipuaiConfig: ChatProviderTestConfig = {
   expectedResponse: "This is a mocked response for the chat UI e2e test.",
 };
 
+// MiniMax - Uses OpenAI-compatible streaming format
+const minimaxConfig: ChatProviderTestConfig = {
+  providerName: "minimax",
+  providerDisplayName: "MiniMax",
+  modelId: "MiniMax-M2.1",
+  modelDisplayName: "MiniMax-M2.1",
+  wiremockStubId: "chat-ui-e2e-test",
+  expectedResponse: "This is a mocked response for the chat UI e2e test.",
+};
+
 const testConfigs: ChatProviderTestConfig[] = [
   anthropicConfig,
   openaiConfig,
@@ -124,6 +134,7 @@ const testConfigs: ChatProviderTestConfig[] = [
   ollamaConfig,
   vllmConfig,
   zhipuaiConfig,
+  minimaxConfig,
 ];
 
 // =============================================================================

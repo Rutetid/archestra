@@ -10,6 +10,7 @@ import type {
   InteractionUtils,
 } from "./llmProviders/common";
 import GeminiGenerateContentInteraction from "./llmProviders/gemini";
+import MinimaxChatCompletionInteraction from "./llmProviders/minimax";
 import MistralChatCompletionInteraction from "./llmProviders/mistral";
 import OllamaChatCompletionInteraction from "./llmProviders/ollama";
 import OpenAiChatCompletionInteraction from "./llmProviders/openai";
@@ -130,6 +131,8 @@ export class DynamicInteraction implements InteractionUtils {
       return new BedrockConverseInteraction(interaction);
     } else if (type === "zhipuai:chatCompletions") {
       return new ZhipuaiChatCompletionInteraction(interaction);
+    } else if (type === "minimax:chatCompletions") {
+      return new MinimaxChatCompletionInteraction(interaction);
     } else if (type === "cerebras:chatCompletions") {
       return new CerebrasChatCompletionInteraction(interaction);
     } else if (type === "mistral:chatCompletions") {
