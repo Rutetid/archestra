@@ -82,6 +82,7 @@ const DEFAULT_MODELS: Record<SupportedProvider, string> = {
   perplexity: "sonar-pro",
   zhipuai: "glm-4-plus",
   bedrock: "anthropic.claude-opus-4-1-20250805-v1:0",
+  minimax: "MiniMax-M2.5",
 };
 
 /**
@@ -142,6 +143,8 @@ async function getSmartDefaultModel(
   }
   if (config.chat.groq?.apiKey) {
     return { model: "llama-3.3-70b-versatile", provider: "groq" };
+  if (config.chat.minimax?.apiKey) {
+    return { model: "MiniMax-M2.5", provider: "minimax" };
   }
 
   // Check if Vertex AI is enabled - use Gemini without API key

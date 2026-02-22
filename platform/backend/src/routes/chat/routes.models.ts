@@ -575,6 +575,46 @@ async function fetchZhipuaiModels(apiKey: string): Promise<ModelInfo[]> {
   return allModels;
 }
 
+async function fetchMinimaxModels(_apiKey: string): Promise<ModelInfo[]> {
+  // MiniMax does not provide a /v1/models endpoint (returns 404)
+  // Return hardcoded list of known models instead
+  // API key validation happens during actual chat completion requests
+  const knownModels: ModelInfo[] = [
+    {
+      id: "MiniMax-M2",
+      displayName: "MiniMax-M2",
+      provider: "minimax" as const,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "MiniMax-M2.1",
+      displayName: "MiniMax-M2.1",
+      provider: "minimax" as const,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "MiniMax-M2.1-lightning",
+      displayName: "MiniMax-M2.1-lightning",
+      provider: "minimax" as const,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "MiniMax-M2.5",
+      displayName: "MiniMax-M2.5",
+      provider: "minimax" as const,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "MiniMax-M2.5-highspeed",
+      displayName: "MiniMax-M2.5-highspeed",
+      provider: "minimax" as const,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  return knownModels;
+}
+
 /**
  * Fetch models from AWS Bedrock API
  * Uses Bearer token authentication (proxy handles AWS credentials)
@@ -803,6 +843,7 @@ async function getProviderApiKey({
     vllm: () => config.chat.vllm.apiKey || "", // vLLM typically doesn't require API keys
     zhipuai: () => config.chat.zhipuai?.apiKey || null,
     bedrock: () => config.chat.bedrock.apiKey || null,
+    minimax: () => config.chat.minimax?.apiKey || null,
   };
 
   return envApiKeyFallbacks[provider]();
@@ -825,6 +866,7 @@ const modelFetchers: Record<
   ollama: fetchOllamaModels,
   cohere: fetchCohereModels,
   zhipuai: fetchZhipuaiModels,
+  minimax: fetchMinimaxModels,
 };
 
 // Register all model fetchers with the sync service
@@ -904,6 +946,10 @@ export async function fetchModelsForProvider({
       if (apiKey) {
         models = await modelFetchers[provider](apiKey);
       }
+    } else if (provider === "minimax") {
+      // MiniMax doesn't support /v1/models endpoint, return hardcoded models
+      // API key validation happens during actual chat requests
+      models = await modelFetchers[provider](apiKey || "EMPTY");
     } else if (provider === "gemini") {
       if (vertexAiEnabled) {
         // Use Vertex AI SDK for model listing (uses ADC for authentication)

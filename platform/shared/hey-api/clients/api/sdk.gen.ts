@@ -1280,6 +1280,30 @@ export const getMcpToolCalls = <ThrowOnError extends boolean = false>(options?: 
 export const getMcpToolCall = <ThrowOnError extends boolean = false>(options: Options<GetMcpToolCallData, ThrowOnError>) => (options.client ?? client).get<GetMcpToolCallResponses, GetMcpToolCallErrors, ThrowOnError>({ url: '/api/mcp-tool-calls/{mcpToolCallId}', ...options });
 
 /**
+ * Create a chat completion with MiniMax (uses default agent)
+ */
+export const minimaxChatCompletionsWithDefaultAgent = <ThrowOnError extends boolean = false>(options?: Options<MinimaxChatCompletionsWithDefaultAgentData, ThrowOnError>) => (options?.client ?? client).post<MinimaxChatCompletionsWithDefaultAgentResponses, MinimaxChatCompletionsWithDefaultAgentErrors, ThrowOnError>({
+    url: '/v1/minimax/chat/completions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers
+    }
+});
+
+/**
+ * Create a chat completion with MiniMax for a specific agent
+ */
+export const minimaxChatCompletionsWithAgent = <ThrowOnError extends boolean = false>(options: Options<MinimaxChatCompletionsWithAgentData, ThrowOnError>) => (options.client ?? client).post<MinimaxChatCompletionsWithAgentResponses, MinimaxChatCompletionsWithAgentErrors, ThrowOnError>({
+    url: '/v1/minimax/{agentId}/chat/completions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Create a chat completion with Mistral (uses default agent)
  */
 export const mistralChatCompletionsWithDefaultAgent = <ThrowOnError extends boolean = false>(options: Options<MistralChatCompletionsWithDefaultAgentData, ThrowOnError>) => (options.client ?? client).post<MistralChatCompletionsWithDefaultAgentResponses, MistralChatCompletionsWithDefaultAgentErrors, ThrowOnError>({

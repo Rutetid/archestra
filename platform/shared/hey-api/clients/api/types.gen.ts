@@ -3904,6 +3904,136 @@ export type ZhipuaiChatCompletionResponseInput = {
     }>;
 };
 
+export type MinimaxChatCompletionRequestInput = {
+    model: string;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    messages: Array<{
+        role: 'system';
+        content: string;
+        name?: string;
+    } | {
+        role: 'user';
+        content: string;
+        name?: string;
+    } | {
+        role: 'assistant';
+        content?: string | unknown;
+        name?: string;
+        reasoning_details?: Array<{
+            text: string;
+        }>;
+        tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            /**
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             */
+            function: {
+                arguments: string;
+                name: string;
+            };
+        }>;
+    } | {
+        role: 'tool';
+        content: string;
+        tool_call_id: string;
+    }>;
+    tools?: Array<{
+        type: 'function';
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api
+         */
+        function: {
+            name: string;
+            description?: string;
+            /**
+             *
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             *
+             * The parameters the functions accepts, described as a JSON Schema object. See the
+             * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
+             * documentation about the format.
+             *
+             * Omitting parameters defines a function with an empty parameter list.
+             *
+             */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            strict?: boolean | unknown;
+        };
+    }>;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    tool_choice?: 'auto' | 'none' | 'required' | {
+        type: 'function';
+        function: {
+            name: string;
+        };
+    };
+    stream?: boolean;
+    temperature?: number | unknown;
+    top_p?: number | unknown;
+    max_tokens?: number | unknown;
+    n?: number;
+    stop?: string | Array<string>;
+    response_format?: {
+        type: 'text' | 'json_object';
+    };
+    user?: string;
+    extra_body?: {
+        reasoning_split?: boolean;
+    };
+};
+
+export type MinimaxChatCompletionResponseInput = {
+    id: string;
+    choices: Array<{
+        finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+        index: number;
+        logprobs?: unknown;
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api#response
+         */
+        message: {
+            content: string | unknown;
+            role: 'assistant';
+            reasoning_details?: Array<{
+                text: string;
+            }>;
+            tool_calls?: Array<{
+                id: string;
+                type: 'function';
+                /**
+                 * https://platform.minimax.io/docs/api-reference/text-openai-api
+                 */
+                function: {
+                    arguments: string;
+                    name: string;
+                };
+            }>;
+        };
+    }>;
+    created: number;
+    model: string;
+    object: 'chat.completion';
+    system_fingerprint?: string | unknown;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api#usage
+     */
+    usage?: {
+        completion_tokens: number;
+        prompt_tokens: number;
+        total_tokens: number;
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
+};
+
 export type OpenAiChatCompletionRequest = {
     model: string;
     /**
@@ -7802,6 +7932,136 @@ export type ZhipuaiChatCompletionResponse = {
         refer: string;
         publish_date: string;
     }>;
+};
+
+export type MinimaxChatCompletionRequest = {
+    model: string;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    messages: Array<{
+        role: 'system';
+        content: string;
+        name?: string;
+    } | {
+        role: 'user';
+        content: string;
+        name?: string;
+    } | {
+        role: 'assistant';
+        content?: string | unknown;
+        name?: string;
+        reasoning_details?: Array<{
+            text: string;
+        }>;
+        tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            /**
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             */
+            function: {
+                arguments: string;
+                name: string;
+            };
+        }>;
+    } | {
+        role: 'tool';
+        content: string;
+        tool_call_id: string;
+    }>;
+    tools?: Array<{
+        type: 'function';
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api
+         */
+        function: {
+            name: string;
+            description?: string;
+            /**
+             *
+             * https://platform.minimax.io/docs/api-reference/text-openai-api
+             *
+             * The parameters the functions accepts, described as a JSON Schema object. See the
+             * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
+             * documentation about the format.
+             *
+             * Omitting parameters defines a function with an empty parameter list.
+             *
+             */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            strict?: boolean | unknown;
+        };
+    }>;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api
+     */
+    tool_choice?: 'auto' | 'none' | 'required' | {
+        type: 'function';
+        function: {
+            name: string;
+        };
+    };
+    stream?: boolean;
+    temperature?: number | unknown;
+    top_p?: number | unknown;
+    max_tokens?: number | unknown;
+    n?: number;
+    stop?: string | Array<string>;
+    response_format?: {
+        type: 'text' | 'json_object';
+    };
+    user?: string;
+    extra_body?: {
+        reasoning_split?: boolean;
+    };
+};
+
+export type MinimaxChatCompletionResponse = {
+    id: string;
+    choices: Array<{
+        finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+        index: number;
+        logprobs?: unknown;
+        /**
+         * https://platform.minimax.io/docs/api-reference/text-openai-api#response
+         */
+        message: {
+            content: string | unknown;
+            role: 'assistant';
+            reasoning_details?: Array<{
+                text: string;
+            }>;
+            tool_calls?: Array<{
+                id: string;
+                type: 'function';
+                /**
+                 * https://platform.minimax.io/docs/api-reference/text-openai-api
+                 */
+                function: {
+                    arguments: string;
+                    name: string;
+                };
+            }>;
+        };
+    }>;
+    created: number;
+    model: string;
+    object: 'chat.completion';
+    system_fingerprint?: string | unknown;
+    /**
+     * https://platform.minimax.io/docs/api-reference/text-openai-api#usage
+     */
+    usage?: {
+        completion_tokens: number;
+        prompt_tokens: number;
+        total_tokens: number;
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
 };
 
 export type GetHealthData = {
@@ -19144,6 +19404,29 @@ export type GetInteractionsResponses = {
             createdAt: string;
             requestType?: 'main' | 'subagent';
             externalAgentIdLabel?: string | null;
+        } | {
+            id: string;
+            profileId: string;
+            externalAgentId: string | null;
+            executionId: string | null;
+            userId: string | null;
+            sessionId: string | null;
+            sessionSource: string | null;
+            request: MinimaxChatCompletionRequest;
+            processedRequest?: MinimaxChatCompletionRequest | null;
+            response: MinimaxChatCompletionResponse;
+            type: 'minimax:chatCompletions';
+            model: string | null;
+            baselineModel: string | null;
+            inputTokens: number | null;
+            outputTokens: number | null;
+            baselineCost: string | null;
+            cost: string | null;
+            toonTokensBefore: number | null;
+            toonTokensAfter: number | null;
+            toonCostSavings: string | null;
+            toonSkipReason: string | null;
+            createdAt: string;
         }>;
         pagination: {
             currentPage: number;
@@ -20190,6 +20473,29 @@ export type GetInteractionResponses = {
         createdAt: string;
         requestType?: 'main' | 'subagent';
         externalAgentIdLabel?: string | null;
+    } | {
+        id: string;
+        profileId: string;
+        externalAgentId: string | null;
+        executionId: string | null;
+        userId: string | null;
+        sessionId: string | null;
+        sessionSource: string | null;
+        request: MinimaxChatCompletionRequest;
+        processedRequest?: MinimaxChatCompletionRequest | null;
+        response: MinimaxChatCompletionResponse;
+        type: 'minimax:chatCompletions';
+        model: string | null;
+        baselineModel: string | null;
+        inputTokens: number | null;
+        outputTokens: number | null;
+        baselineCost: string | null;
+        cost: string | null;
+        toonTokensBefore: number | null;
+        toonTokensAfter: number | null;
+        toonCostSavings: string | null;
+        toonSkipReason: string | null;
+        createdAt: string;
     };
 };
 
@@ -24637,6 +24943,164 @@ export type GetMcpToolCallResponses = {
 };
 
 export type GetMcpToolCallResponse = GetMcpToolCallResponses[keyof GetMcpToolCallResponses];
+
+export type MinimaxChatCompletionsWithDefaultAgentData = {
+    body?: MinimaxChatCompletionRequestInput;
+    headers?: {
+        authorization?: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/minimax/chat/completions';
+};
+
+export type MinimaxChatCompletionsWithDefaultAgentErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+        };
+    };
+};
+
+export type MinimaxChatCompletionsWithDefaultAgentError = MinimaxChatCompletionsWithDefaultAgentErrors[keyof MinimaxChatCompletionsWithDefaultAgentErrors];
+
+export type MinimaxChatCompletionsWithDefaultAgentResponses = {
+    /**
+     * Default Response
+     */
+    200: MinimaxChatCompletionResponse;
+};
+
+export type MinimaxChatCompletionsWithDefaultAgentResponse = MinimaxChatCompletionsWithDefaultAgentResponses[keyof MinimaxChatCompletionsWithDefaultAgentResponses];
+
+export type MinimaxChatCompletionsWithAgentData = {
+    body?: MinimaxChatCompletionRequestInput;
+    headers?: {
+        authorization?: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/v1/minimax/{agentId}/chat/completions';
+};
+
+export type MinimaxChatCompletionsWithAgentErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+        };
+    };
+};
+
+export type MinimaxChatCompletionsWithAgentError = MinimaxChatCompletionsWithAgentErrors[keyof MinimaxChatCompletionsWithAgentErrors];
+
+export type MinimaxChatCompletionsWithAgentResponses = {
+    /**
+     * Default Response
+     */
+    200: MinimaxChatCompletionResponse;
+};
+
+export type MinimaxChatCompletionsWithAgentResponse = MinimaxChatCompletionsWithAgentResponses[keyof MinimaxChatCompletionsWithAgentResponses];
 
 export type MistralChatCompletionsWithDefaultAgentData = {
     body?: GroqChatCompletionRequestInput;

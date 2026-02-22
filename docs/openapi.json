@@ -12694,6 +12694,536 @@
           "object"
         ]
       },
+      "MinimaxChatCompletionRequestInput": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "system"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "user"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "assistant"
+                      ]
+                    },
+                    "content": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "reasoning_details": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    },
+                    "tool_calls": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "function"
+                                ]
+                              },
+                              "function": {
+                                "type": "object",
+                                "properties": {
+                                  "arguments": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "arguments",
+                                  "name"
+                                ],
+                                "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "function"
+                            ],
+                            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                          }
+                        ],
+                        "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                      }
+                    }
+                  },
+                  "required": [
+                    "role"
+                  ],
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "tool"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "tool_call_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content",
+                    "tool_call_id"
+                  ],
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                }
+              ],
+              "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "function"
+                      ]
+                    },
+                    "function": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "parameters": {
+                          "description": "\n    https://platform.minimax.io/docs/api-reference/text-openai-api\n\n    The parameters the functions accepts, described as a JSON Schema object. See the\n    [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for\n    documentation about the format.\n\n    Omitting parameters defines a function with an empty parameter list.\n  ",
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "strict": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "function"
+                  ],
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                }
+              ],
+              "description": "\n  A function tool that can be used to generate a response.\n\n  https://platform.minimax.io/docs/api-reference/text-openai-api\n  "
+            }
+          },
+          "tool_choice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "none",
+                  "required"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "function"
+                    ]
+                  },
+                  "function": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "function"
+                ],
+                "description": "\n  Specifies a tool the model should use. Use to force the model to call a specific function.\n\n  https://platform.minimax.io/docs/api-reference/text-openai-api\n  "
+              }
+            ],
+            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+          },
+          "stream": {
+            "type": "boolean"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "n": {
+            "type": "number",
+            "const": 1
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "response_format": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "json_object"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "user": {
+            "type": "string"
+          },
+          "extra_body": {
+            "type": "object",
+            "properties": {
+              "reasoning_split": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "model",
+          "messages"
+        ]
+      },
+      "MinimaxChatCompletionResponseInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "finish_reason": {
+                  "type": "string",
+                  "enum": [
+                    "stop",
+                    "length",
+                    "tool_calls",
+                    "content_filter"
+                  ]
+                },
+                "index": {
+                  "type": "number"
+                },
+                "logprobs": {
+                  "anyOf": [
+                    {},
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "message": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "assistant"
+                      ]
+                    },
+                    "reasoning_details": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    },
+                    "tool_calls": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "function"
+                                ]
+                              },
+                              "function": {
+                                "type": "object",
+                                "properties": {
+                                  "arguments": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "arguments",
+                                  "name"
+                                ],
+                                "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "function"
+                            ],
+                            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                          }
+                        ],
+                        "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                      }
+                    }
+                  },
+                  "required": [
+                    "content",
+                    "role"
+                  ],
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api#response"
+                }
+              },
+              "required": [
+                "finish_reason",
+                "index",
+                "message"
+              ],
+              "description": "https://platform.minimax.io/docs/api-reference/text-openai-api#response"
+            }
+          },
+          "created": {
+            "type": "number"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "chat.completion"
+            ]
+          },
+          "system_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "completion_tokens": {
+                "type": "number"
+              },
+              "prompt_tokens": {
+                "type": "number"
+              },
+              "total_tokens": {
+                "type": "number"
+              },
+              "completion_tokens_details": {
+                "type": "object",
+                "properties": {
+                  "reasoning_tokens": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "completion_tokens",
+              "prompt_tokens",
+              "total_tokens"
+            ],
+            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api#usage"
+          }
+        },
+        "required": [
+          "id",
+          "choices",
+          "created",
+          "model",
+          "object"
+        ]
+      },
       "OpenAiChatCompletionRequest": {
         "type": "object",
         "properties": {
@@ -25905,6 +26435,558 @@
               ],
               "additionalProperties": false
             }
+          }
+        },
+        "required": [
+          "id",
+          "choices",
+          "created",
+          "model",
+          "object"
+        ],
+        "additionalProperties": false
+      },
+      "MinimaxChatCompletionRequest": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "system"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "additionalProperties": false,
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "user"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "additionalProperties": false,
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "assistant"
+                      ]
+                    },
+                    "content": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "reasoning_details": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "tool_calls": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "function"
+                                ]
+                              },
+                              "function": {
+                                "type": "object",
+                                "properties": {
+                                  "arguments": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "arguments",
+                                  "name"
+                                ],
+                                "additionalProperties": false,
+                                "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "function"
+                            ],
+                            "additionalProperties": false,
+                            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                          }
+                        ],
+                        "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                      }
+                    }
+                  },
+                  "required": [
+                    "role"
+                  ],
+                  "additionalProperties": false,
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "tool"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "tool_call_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content",
+                    "tool_call_id"
+                  ],
+                  "additionalProperties": false,
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                }
+              ],
+              "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "function"
+                      ]
+                    },
+                    "function": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "parameters": {
+                          "description": "\n    https://platform.minimax.io/docs/api-reference/text-openai-api\n\n    The parameters the functions accepts, described as a JSON Schema object. See the\n    [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for\n    documentation about the format.\n\n    Omitting parameters defines a function with an empty parameter list.\n  ",
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "strict": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false,
+                      "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "function"
+                  ],
+                  "additionalProperties": false,
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                }
+              ],
+              "description": "\n  A function tool that can be used to generate a response.\n\n  https://platform.minimax.io/docs/api-reference/text-openai-api\n  "
+            }
+          },
+          "tool_choice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "none",
+                  "required"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "function"
+                    ]
+                  },
+                  "function": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "function"
+                ],
+                "additionalProperties": false,
+                "description": "\n  Specifies a tool the model should use. Use to force the model to call a specific function.\n\n  https://platform.minimax.io/docs/api-reference/text-openai-api\n  "
+              }
+            ],
+            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+          },
+          "stream": {
+            "type": "boolean"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "n": {
+            "type": "number",
+            "const": 1
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "response_format": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "json_object"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          "user": {
+            "type": "string"
+          },
+          "extra_body": {
+            "type": "object",
+            "properties": {
+              "reasoning_split": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "model",
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "MinimaxChatCompletionResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "finish_reason": {
+                  "type": "string",
+                  "enum": [
+                    "stop",
+                    "length",
+                    "tool_calls",
+                    "content_filter"
+                  ]
+                },
+                "index": {
+                  "type": "number"
+                },
+                "logprobs": {
+                  "anyOf": [
+                    {},
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "message": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "assistant"
+                      ]
+                    },
+                    "reasoning_details": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "tool_calls": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "function"
+                                ]
+                              },
+                              "function": {
+                                "type": "object",
+                                "properties": {
+                                  "arguments": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "arguments",
+                                  "name"
+                                ],
+                                "additionalProperties": false,
+                                "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "function"
+                            ],
+                            "additionalProperties": false,
+                            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                          }
+                        ],
+                        "description": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+                      }
+                    }
+                  },
+                  "required": [
+                    "content",
+                    "role"
+                  ],
+                  "additionalProperties": false,
+                  "description": "https://platform.minimax.io/docs/api-reference/text-openai-api#response"
+                }
+              },
+              "required": [
+                "finish_reason",
+                "index",
+                "message"
+              ],
+              "additionalProperties": false,
+              "description": "https://platform.minimax.io/docs/api-reference/text-openai-api#response"
+            }
+          },
+          "created": {
+            "type": "number"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "chat.completion"
+            ]
+          },
+          "system_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "completion_tokens": {
+                "type": "number"
+              },
+              "prompt_tokens": {
+                "type": "number"
+              },
+              "total_tokens": {
+                "type": "number"
+              },
+              "completion_tokens_details": {
+                "type": "object",
+                "properties": {
+                  "reasoning_tokens": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "completion_tokens",
+              "prompt_tokens",
+              "total_tokens"
+            ],
+            "additionalProperties": false,
+            "description": "https://platform.minimax.io/docs/api-reference/text-openai-api#usage"
           }
         },
         "required": [
@@ -46850,7 +47932,8 @@
                           "perplexity",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "secretId": {
@@ -47189,7 +48272,8 @@
                       "perplexity",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "apiKey": {
@@ -47267,7 +48351,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "secretId": {
@@ -47567,7 +48652,8 @@
                 "perplexity",
                 "vllm",
                 "ollama",
-                "zhipuai"
+                "zhipuai",
+                "minimax"
               ]
             },
             "in": "query",
@@ -47620,7 +48706,8 @@
                           "perplexity",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "secretId": {
@@ -47982,7 +49069,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "secretId": {
@@ -48390,7 +49478,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "secretId": {
@@ -48940,7 +50029,8 @@
                 "perplexity",
                 "vllm",
                 "ollama",
-                "zhipuai"
+                "zhipuai",
+                "minimax"
               ]
             },
             "in": "query",
@@ -48978,7 +50068,8 @@
                           "perplexity",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "createdAt": {
@@ -49559,7 +50650,8 @@
                           "groq",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "modelId": {
@@ -50946,7 +52038,8 @@
                           "perplexity",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "hasCustomToolSelection": {
@@ -51323,7 +52416,8 @@
                       "perplexity",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "chatApiKeyId": {
@@ -51394,7 +52488,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -51805,7 +52900,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -52176,7 +53272,8 @@
                       "perplexity",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "chatApiKeyId": {
@@ -52270,7 +53367,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -53211,7 +54309,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -53650,7 +54749,8 @@
                         "perplexity",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "hasCustomToolSelection": {
@@ -57915,7 +59015,8 @@
                         "groq",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     }
                   },
@@ -66794,6 +67895,137 @@
                               "createdAt"
                             ],
                             "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "profileId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "externalAgentId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "executionId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "userId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "sessionId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "sessionSource": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "request": {
+                                "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                              },
+                              "processedRequest": {
+                                "nullable": true,
+                                "allOf": [
+                                  {
+                                    "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                                  }
+                                ]
+                              },
+                              "response": {
+                                "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "minimax:chatCompletions"
+                                ]
+                              },
+                              "model": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "baselineModel": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "inputTokens": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "outputTokens": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "baselineCost": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "cost": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "toonTokensBefore": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "toonTokensAfter": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": -2147483648,
+                                "maximum": 2147483647
+                              },
+                              "toonCostSavings": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "toonSkipReason": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "profileId",
+                              "externalAgentId",
+                              "executionId",
+                              "userId",
+                              "sessionId",
+                              "sessionSource",
+                              "request",
+                              "response",
+                              "type",
+                              "model",
+                              "baselineModel",
+                              "inputTokens",
+                              "outputTokens",
+                              "baselineCost",
+                              "cost",
+                              "toonTokensBefore",
+                              "toonTokensAfter",
+                              "toonCostSavings",
+                              "toonSkipReason",
+                              "createdAt"
+                            ],
+                            "additionalProperties": false
                           }
                         ]
                       }
@@ -71456,6 +72688,137 @@
                         "externalAgentIdLabel": {
                           "nullable": true,
                           "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "profileId",
+                        "externalAgentId",
+                        "executionId",
+                        "userId",
+                        "sessionId",
+                        "sessionSource",
+                        "request",
+                        "response",
+                        "type",
+                        "model",
+                        "baselineModel",
+                        "inputTokens",
+                        "outputTokens",
+                        "baselineCost",
+                        "cost",
+                        "toonTokensBefore",
+                        "toonTokensAfter",
+                        "toonCostSavings",
+                        "toonSkipReason",
+                        "createdAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "profileId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "externalAgentId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "userId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "sessionSource": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "request": {
+                          "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                        },
+                        "processedRequest": {
+                          "nullable": true,
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/MinimaxChatCompletionRequest"
+                            }
+                          ]
+                        },
+                        "response": {
+                          "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "minimax:chatCompletions"
+                          ]
+                        },
+                        "model": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "baselineModel": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "inputTokens": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "outputTokens": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "baselineCost": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "cost": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "toonTokensBefore": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "toonTokensAfter": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        "toonCostSavings": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "toonSkipReason": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
                         }
                       },
                       "required": [
@@ -88120,6 +89483,516 @@
         }
       }
     },
+    "/v1/minimax/chat/completions": {
+      "post": {
+        "operationId": "minimaxChatCompletionsWithDefaultAgent",
+        "tags": [
+          "llm-proxy"
+        ],
+        "description": "Create a chat completion with MiniMax (uses default agent)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinimaxChatCompletionRequestInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "header",
+            "name": "authorization",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_validation_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authentication_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authorization_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_not_found_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_conflict_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_internal_server_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/minimax/{agentId}/chat/completions": {
+      "post": {
+        "operationId": "minimaxChatCompletionsWithAgent",
+        "tags": [
+          "llm-proxy"
+        ],
+        "description": "Create a chat completion with MiniMax for a specific agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinimaxChatCompletionRequestInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$"
+            },
+            "in": "path",
+            "name": "agentId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "header",
+            "name": "authorization",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MinimaxChatCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_validation_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authentication_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_authorization_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_not_found_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_conflict_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "api_internal_server_error"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/mistral/chat/completions": {
       "post": {
         "operationId": "mistralChatCompletionsWithDefaultAgent",
@@ -90490,7 +92363,8 @@
                           "groq",
                           "vllm",
                           "ollama",
-                          "zhipuai"
+                          "zhipuai",
+                          "minimax"
                         ]
                       },
                       "targetModel": {
@@ -90810,7 +92684,8 @@
                       "groq",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "targetModel": {
@@ -90905,7 +92780,8 @@
                         "groq",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "targetModel": {
@@ -91226,7 +93102,8 @@
                       "groq",
                       "vllm",
                       "ollama",
-                      "zhipuai"
+                      "zhipuai",
+                      "minimax"
                     ]
                   },
                   "targetModel": {
@@ -91325,7 +93202,8 @@
                         "groq",
                         "vllm",
                         "ollama",
-                        "zhipuai"
+                        "zhipuai",
+                        "minimax"
                       ]
                     },
                     "targetModel": {
