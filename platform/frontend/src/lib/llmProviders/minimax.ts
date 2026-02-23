@@ -77,18 +77,7 @@ class MinimaxChatCompletionInteraction implements InteractionUtils {
       if (message.role !== "user") {
         continue;
       }
-      const content = message.content as
-        | string
-        | Array<{ type: string; text?: string; image_url?: { url: string } }>;
-      if (typeof content === "string") {
-        return content;
-      }
-      if (Array.isArray(content) && content.length > 0) {
-        const firstPart = content[0];
-        if (firstPart && firstPart.type === "text" && firstPart.text) {
-          return firstPart.text;
-        }
-      }
+      return message.content ?? "";
     }
     return "";
   }
@@ -114,12 +103,6 @@ class MinimaxChatCompletionInteraction implements InteractionUtils {
     if (role === "assistant") {
       if (typeof content === "string" && content) {
         parts.push({ type: "text", text: content });
-      } else if (Array.isArray(content)) {
-        for (const part of content) {
-          if ("type" in part && part.type === "text" && "text" in part) {
-            parts.push({ type: "text", text: part.text });
-          }
-        }
       }
 
       const { tool_calls: toolCalls } = message;

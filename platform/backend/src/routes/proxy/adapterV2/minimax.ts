@@ -2,7 +2,7 @@ import { encode as toonEncode } from "@toon-format/toon";
 import { get } from "lodash-es";
 import config from "@/config";
 import logger from "@/logging";
-import { TokenPriceModel } from "@/models";
+import { ModelModel } from "@/models";
 import { metrics } from "@/observability";
 import { getTokenizer } from "@/tokenizers";
 import type {
@@ -815,18 +815,23 @@ class MinimaxStreamAdapter
     if (this.request?.messages) {
       // Use countTokens with proper message format
       inputTokens = tokenizer.countTokens(
-        this.request.messages
-          .filter((m) => m.role !== "tool")
-          .map((m) => {
-            if (m.role === "system") {
-              return { role: "system" as const, content: m.content || "" };
-            }
-            if (m.role === "user") {
-              return { role: "user" as const, content: m.content || "" };
-            }
-            // assistant
-            return { role: "assistant" as const, content: m.content || "" };
-          }),
+        this.request.messages.map((m) => {
+          if (m.role === "system") {
+            return { role: "system" as const, content: m.content || "" };
+          }
+          if (m.role === "user") {
+            return { role: "user" as const, content: m.content || "" };
+          }
+          if (m.role === "tool") {
+            const content =
+              typeof m.content === "string"
+                ? m.content
+                : JSON.stringify(m.content);
+            return { role: "user" as const, content };
+          }
+          // assistant
+          return { role: "assistant" as const, content: m.content || "" };
+        }),
       );
     }
 
@@ -949,12 +954,11 @@ async function convertToolResultsToToon(
   if (toolResultCount > 0) {
     const tokensSaved = totalTokensBefore - totalTokensAfter;
     if (tokensSaved > 0) {
-      const tokenPrice = await TokenPriceModel.findByModel(model);
-      if (tokenPrice) {
-        const inputPricePerToken =
-          Number(tokenPrice.pricePerMillionInput) / 1000000;
-        toonCostSavings = tokensSaved * inputPricePerToken;
-      }
+      toonCostSavings = await ModelModel.calculateCostSavings(
+        model,
+        tokensSaved,
+        "minimax",
+      );
     }
   }
 
@@ -978,31 +982,27 @@ async function estimateRequestCost(
   messages: MinimaxMessages,
 ): Promise<number> {
   const tokenizer = getTokenizer("minimax");
-  const tokenPrice = await TokenPriceModel.findByModel(model);
-
-  if (!tokenPrice) {
-    return 0;
-  }
-
-  const inputPricePerToken = Number(tokenPrice.pricePerMillionInput) / 1000000;
 
   // Convert messages to proper format for tokenizer
-  const tokenizableMessages = messages
-    .filter((m) => m.role !== "tool")
-    .map((m) => {
-      if (m.role === "system") {
-        return { role: "system" as const, content: m.content || "" };
-      }
-      if (m.role === "user") {
-        return { role: "user" as const, content: m.content || "" };
-      }
-      // assistant
-      return { role: "assistant" as const, content: m.content || "" };
-    });
+  const tokenizableMessages = messages.map((m) => {
+    if (m.role === "system") {
+      return { role: "system" as const, content: m.content || "" };
+    }
+    if (m.role === "user") {
+      return { role: "user" as const, content: m.content || "" };
+    }
+    if (m.role === "tool") {
+      const content =
+        typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      return { role: "user" as const, content };
+    }
+    // assistant
+    return { role: "assistant" as const, content: m.content || "" };
+  });
 
   const totalTokens = tokenizer.countTokens(tokenizableMessages);
 
-  return totalTokens * inputPricePerToken;
+  return ModelModel.calculateCostSavings(model, totalTokens, "minimax");
 }
 
 // =============================================================================
@@ -1059,12 +1059,6 @@ export const minimaxAdapterFactory: LLMProvider<
     apiKey: string | undefined,
     options?: CreateClientOptions,
   ): MinimaxClient {
-    // Return mock client if mock mode is enabled
-    // Note: MockMinimaxClient will be created later
-    // if (options?.mockMode) {
-    //   return new MockMinimaxClient() as unknown as MinimaxClient;
-    // }
-
     const customFetch = options?.agent
       ? metrics.llm.getObservableFetch(
           "minimax",

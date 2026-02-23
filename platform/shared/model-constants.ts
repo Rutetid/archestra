@@ -71,6 +71,19 @@ export const PERPLEXITY_MODELS = [
 ] as const;
 
 /**
+ * MiniMax model definitions — single source of truth.
+ * MiniMax does not provide a /v1/models endpoint, so models are maintained here.
+ * @see https://www.minimaxi.com/en/news
+ */
+export const MINIMAX_MODELS = [
+  { id: "MiniMax-M2", displayName: "MiniMax-M2" },
+  { id: "MiniMax-M2.1", displayName: "MiniMax-M2.1" },
+  { id: "MiniMax-M2.1-lightning", displayName: "MiniMax-M2.1-lightning" },
+  { id: "MiniMax-M2.5", displayName: "MiniMax-M2.5" },
+  { id: "MiniMax-M2.5-highspeed", displayName: "MiniMax-M2.5-highspeed" },
+] as const;
+
+/**
  * Default provider base URLs.
  * Used as placeholder hints in the UI and as fallback values when no per-key base URL is configured.
  */

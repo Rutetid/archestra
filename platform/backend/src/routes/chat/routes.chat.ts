@@ -143,6 +143,7 @@ async function getSmartDefaultModel(
   }
   if (config.chat.groq?.apiKey) {
     return { model: "llama-3.3-70b-versatile", provider: "groq" };
+  }
   if (config.chat.minimax?.apiKey) {
     return { model: "MiniMax-M2.5", provider: "minimax" };
   }

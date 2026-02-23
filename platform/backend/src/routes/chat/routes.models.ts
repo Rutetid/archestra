@@ -1,4 +1,5 @@
 import {
+  MINIMAX_MODELS,
   PERPLEXITY_MODELS,
   PROVIDERS_WITH_OPTIONAL_API_KEY,
   RouteId,
@@ -577,42 +578,13 @@ async function fetchZhipuaiModels(apiKey: string): Promise<ModelInfo[]> {
 
 async function fetchMinimaxModels(_apiKey: string): Promise<ModelInfo[]> {
   // MiniMax does not provide a /v1/models endpoint (returns 404)
-  // Return hardcoded list of known models instead
-  // API key validation happens during actual chat completion requests
-  const knownModels: ModelInfo[] = [
-    {
-      id: "MiniMax-M2",
-      displayName: "MiniMax-M2",
-      provider: "minimax" as const,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: "MiniMax-M2.1",
-      displayName: "MiniMax-M2.1",
-      provider: "minimax" as const,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: "MiniMax-M2.1-lightning",
-      displayName: "MiniMax-M2.1-lightning",
-      provider: "minimax" as const,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: "MiniMax-M2.5",
-      displayName: "MiniMax-M2.5",
-      provider: "minimax" as const,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: "MiniMax-M2.5-highspeed",
-      displayName: "MiniMax-M2.5-highspeed",
-      provider: "minimax" as const,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  return knownModels;
+  // Return known models directly. API key validation happens during actual chat completion requests.
+  // Model list centralized in shared/model-constants.ts (MINIMAX_MODELS).
+  return MINIMAX_MODELS.map((m) => ({
+    id: m.id,
+    displayName: m.displayName,
+    provider: "minimax" as const,
+  }));
 }
 
 /**
