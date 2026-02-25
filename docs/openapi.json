@@ -68002,6 +68002,17 @@
                               "createdAt": {
                                 "type": "string",
                                 "format": "date-time"
+                              },
+                              "requestType": {
+                                "type": "string",
+                                "enum": [
+                                  "main",
+                                  "subagent"
+                                ]
+                              },
+                              "externalAgentIdLabel": {
+                                "nullable": true,
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -72822,6 +72833,17 @@
                         "createdAt": {
                           "type": "string",
                           "format": "date-time"
+                        },
+                        "requestType": {
+                          "type": "string",
+                          "enum": [
+                            "main",
+                            "subagent"
+                          ]
+                        },
+                        "externalAgentIdLabel": {
+                          "nullable": true,
+                          "type": "string"
                         }
                       },
                       "required": [

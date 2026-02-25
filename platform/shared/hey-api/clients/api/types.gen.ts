@@ -19427,6 +19427,8 @@ export type GetInteractionsResponses = {
             toonCostSavings: string | null;
             toonSkipReason: string | null;
             createdAt: string;
+            requestType?: 'main' | 'subagent';
+            externalAgentIdLabel?: string | null;
         }>;
         pagination: {
             currentPage: number;
@@ -20496,6 +20498,8 @@ export type GetInteractionResponses = {
         toonCostSavings: string | null;
         toonSkipReason: string | null;
         createdAt: string;
+        requestType?: 'main' | 'subagent';
+        externalAgentIdLabel?: string | null;
     };
 };
 
