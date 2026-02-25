@@ -253,9 +253,13 @@ class MinimaxRequestAdapter
         );
 
         let content: unknown;
-        try {
-          content = JSON.parse(message.content);
-        } catch {
+        if (typeof message.content === "string") {
+          try {
+            content = JSON.parse(message.content);
+          } catch {
+            content = message.content;
+          }
+        } else {
           content = message.content;
         }
 
