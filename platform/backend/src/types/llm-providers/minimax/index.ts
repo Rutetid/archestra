@@ -1,9 +1,12 @@
 /**
- * NOTE: this is a bit of a PITA/verbose but in order to properly type everything that we are
- * proxying.. this is kinda necessary.
+ * MiniMax LLM Provider Types - OpenAI-compatible
  *
- * MiniMax provides an OpenAI-compatible API, so we define Zod schemas based on their docs
+ * MiniMax uses an OpenAI-compatible API with additional reasoning_details
+ * support for thinking content.
+ *
+ * @see https://platform.minimax.io/docs/api-reference/text-openai-api
  */
+import type OpenAIProvider from "openai";
 import type { z } from "zod";
 import * as MinimaxAPI from "./api";
 import * as MinimaxMessages from "./messages";
@@ -31,44 +34,17 @@ namespace Minimax {
     export type Role = Message["role"];
 
     /**
-     * Streaming response chunk
-     * Similar to OpenAI but with reasoning_details array for thinking content
+     * Streaming response chunk - extends OpenAI's type with reasoning_details
+     * for thinking content (when reasoning_split=True is used in request)
      */
-    export type ChatCompletionChunk = {
-      id: string;
-      object: "chat.completion.chunk";
-      created: number;
-      model: string;
-      choices: Array<{
-        index: number;
-        delta: {
-          role?: "assistant" | "";
-          content?: string;
-          /**
-           * Array of reasoning details (thinking content)
-           * Only present when reasoning_split=True is used in request
-           */
-          reasoning_details?: Array<{
-            text?: string;
-          }>;
-          tool_calls?: Array<{
-            index: number;
-            id?: string;
-            type?: "function";
-            function?: {
-              name?: string;
-              arguments?: string;
-            };
-          }>;
-        };
-        finish_reason: string | null;
-      }>;
-      usage?: {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
+    export type ChatCompletionChunk =
+      OpenAIProvider.Chat.Completions.ChatCompletionChunk & {
+        choices: Array<{
+          delta: {
+            reasoning_details?: Array<{ text?: string }>;
+          };
+        }>;
       };
-    };
   }
 }
 
