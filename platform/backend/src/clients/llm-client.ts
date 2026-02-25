@@ -681,6 +681,7 @@ const proxiedModelCreators: Record<SupportedChatProvider, ProxiedModelCreator> =
         apiKey,
         baseURL: buildProxyBaseUrl("minimax", agentId),
         headers,
+        fetch: createTracedFetch(),
       });
       return client.chat(modelName);
     },

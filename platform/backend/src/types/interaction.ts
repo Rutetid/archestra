@@ -197,6 +197,9 @@ export const SelectInteractionSchema = z.discriminatedUnion("type", [
     processedRequest:
       Minimax.API.ChatCompletionRequestSchema.nullable().optional(),
     response: Minimax.API.ChatCompletionResponseSchema,
+    requestType: RequestTypeSchema.optional(),
+    /** Resolved prompt name if externalAgentId matches a prompt ID */
+    externalAgentIdLabel: z.string().nullable().optional(),
   }),
 ]);
 
