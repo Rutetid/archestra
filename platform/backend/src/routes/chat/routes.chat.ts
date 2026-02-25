@@ -54,6 +54,7 @@ import {
   isSupportedChatProvider,
   SelectConversationSchema,
   type SupportedChatProvider,
+  SupportedChatProviderSchema,
   type UpdateConversation,
   UpdateConversationSchema,
   UuidIdSchema,
@@ -129,23 +130,14 @@ async function getSmartDefaultModel(
   }
 
   // Check environment variables as fallback
-  if (config.chat.anthropic.apiKey) {
-    return { model: "claude-opus-4-1-20250805", provider: "anthropic" };
-  }
-  if (config.chat.openai.apiKey) {
-    return { model: "gpt-4o", provider: "openai" };
-  }
-  if (config.chat.gemini.apiKey) {
-    return { model: "gemini-2.5-pro", provider: "gemini" };
-  }
-  if (config.chat.cohere?.apiKey) {
-    return { model: "command-r-08-2024", provider: "cohere" };
-  }
-  if (config.chat.groq?.apiKey) {
-    return { model: "llama-3.3-70b-versatile", provider: "groq" };
-  }
-  if (config.chat.minimax?.apiKey) {
-    return { model: "MiniMax-M2.5", provider: "minimax" };
+  // Uses DEFAULT_MODELS for model names to avoid duplicating defaults
+  for (const provider of SupportedChatProviderSchema.options) {
+    const providerConfig = config.chat[provider] as
+      | { apiKey?: string }
+      | undefined;
+    if (providerConfig?.apiKey) {
+      return { model: DEFAULT_MODELS[provider], provider };
+    }
   }
 
   // Check if Vertex AI is enabled - use Gemini without API key
