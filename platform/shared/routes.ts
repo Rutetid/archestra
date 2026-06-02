@@ -387,6 +387,13 @@ export const RouteId = {
   UpdateMcpPresetEntry: "updateMcpPresetEntry",
   DeleteMcpPresetEntry: "deleteMcpPresetEntry",
 
+  // Org-level deployment environments
+  ListEnvironments: "listEnvironments",
+  CreateEnvironment: "createEnvironment",
+  UpdateEnvironment: "updateEnvironment",
+  DeleteEnvironment: "deleteEnvironment",
+  UpdateDefaultEnvironment: "updateDefaultEnvironment",
+
   // Knowledge Settings Routes (organization-level)
   UpdateKnowledgeSettings: "updateKnowledgeSettings",
   DropEmbeddingConfig: "dropEmbeddingConfig",

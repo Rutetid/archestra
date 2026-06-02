@@ -231,6 +231,35 @@ const organizationsTable = pgTable("organization", {
   presetEntityDefaultLabel: text("preset_entity_default_label"),
 
   /**
+   * Display name of the implicit "default" environment (the deployment target
+   * referenced by internal_mcp_catalog.environment_id = null). NULL falls back
+   * to "Default" in the UI.
+   */
+  defaultEnvironmentName: text("default_environment_name"),
+
+  /**
+   * Kubernetes namespace for the implicit "default" environment. Stored only
+   * (not applied at deploy yet). NULL = unset.
+   */
+  defaultEnvironmentNamespace: text("default_environment_namespace"),
+
+  /**
+   * Optional human-readable description of the implicit "default" environment,
+   * shown in the environment selector. NULL = unset.
+   */
+  defaultEnvironmentDescription: text("default_environment_description"),
+
+  /**
+   * When true, assigning a catalog item to the implicit "default" environment
+   * (environment_id = null) requires the `environment:admin` permission — i.e.
+   * creating a catalog item without choosing an environment is admin-gated.
+   * Mirrors the per-environment `environment.restricted` flag for the default.
+   */
+  defaultEnvironmentRestricted: boolean("default_environment_restricted")
+    .notNull()
+    .default(false),
+
+  /**
    * When true, the Agent Skill tools (`list_skills`, `activate_skill`,
    * `read_skill_file`) are assigned to every agent in the org and added to all
    * new agents. Flipped on

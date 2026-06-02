@@ -537,6 +537,7 @@ Required RBAC permission: `mcpRegistry:create`
 | `labels[].key` | `string` | Yes | Label key. |
 | `labels[].value` | `string` | Yes | Label value. |
 | `teams` | `string[]` | No | Team IDs for team-scoped access control. |
+| `environmentId` | `string \| null` | No | ID of the environment this server belongs to. Omit (or pass null) to leave it in the default environment. |
 | `serverType` | `"local" \| "remote" \| "builtin"` | No | Server type: local, remote, or builtin. |
 | `serverUrl` | `string \| null` | No | [Remote] The URL of the remote MCP server. |
 | `requiresAuth` | `boolean` | No | [Remote] Whether the server requires authentication. |
