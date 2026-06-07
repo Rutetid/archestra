@@ -5,7 +5,7 @@ import {
   E2eTestId,
   getDeleteVirtualKeyButtonTestId,
   getVirtualKeyRowTestId,
-} from "@shared";
+} from "@archestra/shared";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Globe,
@@ -22,11 +22,8 @@ import { CopyableCode } from "@/components/copyable-code";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ExpirationDateTimeField } from "@/components/expiration-date-time-field";
 import { FormDialog } from "@/components/form-dialog";
-import {
-  type LlmProviderApiKeyResponse,
-  PROVIDER_CONFIG,
-} from "@/components/llm-provider-api-key-form";
-import { LlmProviderApiKeyFilterSelect } from "@/components/llm-provider-options";
+import { LlmProviderApiKeyDropdown } from "@/components/llm-provider-api-key-dropdown";
+import type { LlmProviderApiKeyResponse } from "@/components/llm-provider-api-key-form";
 import {
   formatProviderKeySummary,
   type ProviderApiKeyMap,
@@ -50,8 +47,7 @@ import {
   type VisibilityOption,
   VisibilitySelector,
 } from "@/components/visibility-selector";
-import { useHasPermissions } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { useFeature } from "@/lib/config/config.query";
 import { useDataTableQueryParams } from "@/lib/hooks/use-data-table-query-params";
 import { useLlmProviderApiKeys } from "@/lib/llm-provider-api-keys.query";
@@ -94,7 +90,7 @@ export default function VirtualKeysPage() {
   const paginationMeta = response?.pagination;
 
   const { data: apiKeys = [] } = useLlmProviderApiKeys();
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const { data: canReadTeams } = useHasPermissions({ team: ["read"] });
   const { data: isVirtualKeyAdmin } = useHasPermissions({
     llmVirtualKey: ["admin"],
@@ -108,6 +104,8 @@ export default function VirtualKeysPage() {
   const [editingKey, setEditingKey] = useState<VirtualKeyWithParent | null>(
     null,
   );
+  const [providerApiKeyFilterOpen, setProviderApiKeyFilterOpen] =
+    useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deletingKey, setDeletingKey] = useState<VirtualKeyWithParent | null>(
     null,
@@ -245,24 +243,32 @@ export default function VirtualKeysPage() {
           searchFields={["name"]}
           paramName="search"
         />
-        <LlmProviderApiKeyFilterSelect
-          value={providerApiKeyIdFilter}
-          onValueChange={(value) =>
-            updateQueryParams({
-              providerApiKeyId: value === "all" ? null : value,
-              page: "1",
-            })
+        <LlmProviderApiKeyDropdown
+          availableKeys={parentableKeys}
+          selectedApiKeyId={
+            providerApiKeyIdFilter === "all" ? null : providerApiKeyIdFilter
           }
-          allLabel="All provider API keys"
-          options={parentableKeys.map((key) => {
-            const config = PROVIDER_CONFIG[key.provider];
-            return {
-              value: key.id,
-              icon: config.icon,
-              providerName: config.name,
-              keyName: key.name,
-            };
-          })}
+          open={providerApiKeyFilterOpen}
+          onOpenChange={setProviderApiKeyFilterOpen}
+          onSelectKey={(value) => {
+            updateQueryParams({
+              providerApiKeyId: value,
+              page: "1",
+            });
+            setProviderApiKeyFilterOpen(false);
+          }}
+          triggerVariant="select"
+          triggerClassName="w-full sm:w-[280px] h-9 text-sm"
+          popoverClassName="w-[var(--radix-popover-trigger-width)]"
+          allOptionLabel="All provider API keys"
+          allOptionSelected={providerApiKeyIdFilter === "all"}
+          onSelectAllOption={() => {
+            updateQueryParams({
+              providerApiKeyId: null,
+              page: "1",
+            });
+            setProviderApiKeyFilterOpen(false);
+          }}
         />
       </div>
 

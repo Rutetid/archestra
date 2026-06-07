@@ -1,4 +1,4 @@
-import { RouteId, SupportedProvidersSchema } from "@shared";
+import { RouteId, SupportedProvidersSchema } from "@archestra/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import {
@@ -34,12 +34,19 @@ const llmOauthClientsRoutes: FastifyPluginAsyncZod = async (fastify) => {
         operationId: RouteId.GetLlmOauthClients,
         description: "List LLM OAuth clients that can access LLM proxies",
         tags: ["LLM OAuth Clients"],
+        querystring: z.object({
+          search: z.string().trim().min(1).optional(),
+          providerApiKeyId: z.string().uuid().optional(),
+        }),
         response: constructResponseSchema(z.array(LlmOauthClientSchema)),
       },
     },
-    async ({ organizationId }, reply) => {
-      const oauthClients =
-        await LlmOauthClientModel.findAllByOrganization(organizationId);
+    async ({ organizationId, query }, reply) => {
+      const oauthClients = await LlmOauthClientModel.findAllByOrganization({
+        organizationId,
+        search: query.search,
+        providerApiKeyId: query.providerApiKeyId,
+      });
       return reply.send(oauthClients);
     },
   );

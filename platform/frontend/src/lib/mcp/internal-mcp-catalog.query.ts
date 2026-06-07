@@ -1,6 +1,7 @@
-import { archestraApiSdk, type archestraApiTypes } from "@shared";
+import { archestraApiSdk, type archestraApiTypes } from "@archestra/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { environmentKeys } from "@/lib/environment.query";
 
 const {
   createInternalMcpCatalogItem,
@@ -11,6 +12,8 @@ const {
   getInternalMcpCatalogLabelValues,
   getInternalMcpCatalogTools,
   getK8sImagePullSecrets,
+  refreshInternalMcpCatalogImage,
+  reinstallInternalMcpCatalogItem,
   resetDeploymentYaml,
   updateInternalMcpCatalogItem,
   validateDeploymentYaml,
@@ -89,15 +92,66 @@ export function useUpdateInternalMcpCatalogItem() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mcp-catalog"] });
-      // Also invalidate MCP servers to refresh reinstallRequired flags
       queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
-      // Invalidate all chat MCP tools (server config may have changed)
       queryClient.invalidateQueries({ queryKey: ["chat", "agents"] });
+      queryClient.invalidateQueries({ queryKey: environmentKeys.list() });
       toast.success("Catalog item updated successfully");
     },
     onError: (error) => {
       console.error("Edit error:", error);
       toast.error("Failed to update catalog item");
+    },
+  });
+}
+
+/**
+ * Reinstall the shared K8s Deployment for a multi-tenant local catalog.
+ * Recreates the pod with the current catalog spec and cascades tool sync
+ * to every install attached to the catalog. Only callable when
+ * `catalog.catalogReinstallRequired === true`.
+ */
+export function useReinstallInternalMcpCatalogItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const response = await reinstallInternalMcpCatalogItem({
+        path: { id },
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mcp-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["chat", "agents"] });
+      toast.success("Catalog reinstalled successfully");
+    },
+    onError: (error) => {
+      console.error("Catalog reinstall error:", error);
+      toast.error("Failed to reinstall catalog");
+    },
+  });
+}
+
+export function useRefreshInternalMcpCatalogImage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const response = await refreshInternalMcpCatalogImage({
+        path: { id },
+      });
+      return response.data;
+    },
+    onMutate: () => {
+      toast.info("Starting pod restart");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mcp-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["chat", "agents"] });
+    },
+    onError: (error) => {
+      console.error("Pod restart error:", error);
+      toast.error("Failed to start pod restart");
     },
   });
 }

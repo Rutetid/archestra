@@ -1,4 +1,4 @@
-import { requiredPagePermissionsMap } from "@shared/access-control";
+import { requiredPagePermissionsMap } from "@archestra/shared/access-control";
 import { usePermissionMap } from "@/lib/auth/auth.query";
 import config from "@/lib/config/config";
 
@@ -12,17 +12,20 @@ export function useSettingsTabs() {
     ...(permissionMap?.["/settings/api-keys"]
       ? [{ label: "API Keys", href: "/settings/api-keys" }]
       : []),
+    ...(permissionMap?.["/settings/service-accounts"]
+      ? [{ label: "Service Accounts", href: "/settings/service-accounts" }]
+      : []),
     ...(permissionMap?.["/settings/agents"]
       ? [{ label: "Agents", href: "/settings/agents" }]
       : []),
     ...(permissionMap?.["/settings/llm"]
       ? [{ label: "LLM", href: "/settings/llm" }]
       : []),
-    ...(permissionMap?.["/settings/connection"]
-      ? [{ label: "Connect page", href: "/settings/connection" }]
-      : []),
     ...(permissionMap?.["/settings/knowledge"]
       ? [{ label: "Knowledge", href: "/settings/knowledge" }]
+      : []),
+    ...(permissionMap?.["/settings/environments"]
+      ? [{ label: "Environments", href: "/settings/environments" }]
       : []),
     ...(permissionMap?.["/settings/users"]
       ? [{ label: "Users", href: "/settings/users" }]
@@ -32,6 +35,9 @@ export function useSettingsTabs() {
       : []),
     ...(permissionMap?.["/settings/roles"]
       ? [{ label: "Roles", href: "/settings/roles" }]
+      : []),
+    ...(permissionMap?.["/settings/integrations"]
+      ? [{ label: "Integrations", href: "/settings/integrations" }]
       : []),
     ...(config.enterpriseFeatures.core &&
     permissionMap?.["/settings/identity-providers"]

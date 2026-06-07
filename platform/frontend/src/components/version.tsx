@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import config from "@/lib/config/config";
 import { useHealth } from "@/lib/config/health.query";
 import { useLatestGitHubRelease } from "@/lib/github/github-release.query";
@@ -15,17 +15,21 @@ interface VersionProps {
   inline?: boolean;
 }
 
-export function Version({ inline = false }: VersionProps) {
+export const Version = memo(function Version({ inline = false }: VersionProps) {
   const { data } = useHealth();
-  const { data: latestRelease } = useLatestGitHubRelease();
   const { data: organization } = useOrganization();
   const { data: appearance } = useAppearanceSettings();
-  const [shouldHide, setShouldHide] = useState(false);
-
+  const hideReleaseLink = config.enterpriseFeatures.fullWhiteLabeling;
   // Prefer authenticated org data; fall back to public appearance for unauthenticated pages (e.g. sign-in)
   const footerText = organization?.footerText ?? appearance?.footerText;
   const version = data?.version;
-  const hideReleaseLink = config.enterpriseFeatures.fullWhiteLabeling;
+  // The release check only powers a footer hint, so skip it when hidden and
+  // defer it when visible to keep startup focused on app data.
+  const { data: latestRelease } = useLatestGitHubRelease({
+    enabled: !hideReleaseLink && !!version && !footerText,
+    deferMs: 5000,
+  });
+  const [shouldHide, setShouldHide] = useState(false);
 
   const hasNewVersion = useMemo(() => {
     if (!version || !latestRelease?.tag_name) return false;
@@ -97,4 +101,4 @@ export function Version({ inline = false }: VersionProps) {
       )}
     </div>
   );
-}
+});

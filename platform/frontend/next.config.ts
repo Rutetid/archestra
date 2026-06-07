@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { MCP_CATALOG_API_BASE_URL } from "@archestra/shared";
 import { withSentryConfig } from "@sentry/nextjs";
-import { MCP_CATALOG_API_BASE_URL } from "@shared";
 import type { NextConfig } from "next";
 
 const platformPkg = JSON.parse(
@@ -13,13 +13,30 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_VERSION: platformPkg.version,
   },
+  // Lets a second `next dev` (e.g. the Playwright MSW server on :3010) run
+  // alongside the main one without colliding on `.next/dev/lock`.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
-  transpilePackages: ["@shared"],
+  // Version skew protection during rolling deployments.
+  // https://nextjs.org/docs/app/api-reference/config/next-config-js/deploymentId
+  // VERSION is set as a build arg by CI and baked into the
+  // client bundle here. On client navigation, a mismatch between
+  // the client's deployment id and the server's response header triggers a
+  // hard reload, fetching fresh assets that match the server build.
+  // Next.js restricts the id to [a-zA-Z0-9_-], so non-conforming characters
+  // (e.g. the dots in `v1.2.41`) are replaced with hyphens.
+  // https://nextjs.org/docs/messages/deploymentid-invalid-characters
+  deploymentId: process.env.VERSION?.replace(/[^a-zA-Z0-9_-]/g, "-"),
+  transpilePackages: ["@archestra/shared"],
   // Disable dev indicators so they don't show up in docs automated screenshots
   devIndicators: false,
   turbopack: {
+    // pin the workspace root (where pnpm-lock.yaml lives) so Next.js 16 doesn't
+    // misinfer it in this monorepo and panic with "Next.js package not found"
+    // when following pnpm's hoisted next symlink.
+    root: resolve(import.meta.dirname, ".."),
     resolveAlias: {
-      "@shared/access-control": "../shared/access-control.ts",
+      "@archestra/shared/access-control": "../shared/access-control.ts",
     },
   },
   logging: {
@@ -31,6 +48,14 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     proxyTimeout: 300000, // 5 minutes in milliseconds - prevents SSE stream timeout
+    // Next defaults the proxy body limit to 10MB; raise it well above the
+    // backend's 70MB default so an operator who increases ARCHESTRA_API_BODY_LIMIT
+    // at runtime doesn't also have to rebuild the FE image. (next.config.ts is
+    // evaluated at build time in `output: "standalone"` mode, so this value is
+    // baked into the image — making it env-driven would silently drift from
+    // the backend's runtime value.) Anything the proxy lets through still gets
+    // sized-checked by the backend's bodyLimit, which is the authoritative cap.
+    proxyClientMaxBodySize: "200mb",
   },
   httpAgentOptions: {
     keepAlive: true,
@@ -70,6 +95,10 @@ const nextConfig: NextConfig = {
         destination: `${backendUrl}/_sandbox/:path*`,
       },
       {
+        source: "/skills/m/:path*",
+        destination: `${backendUrl}/skills/m/:path*`,
+      },
+      {
         source: "/ws",
         destination: `${backendUrl}/ws`,
       },
@@ -92,7 +121,7 @@ function getAllowedDevOrigins(): string[] {
     });
 }
 
-export default withSentryConfig(nextConfig, {
+const sentryWebpackOptions = {
   // For all available options, see:
   // https://www.npmjs.com/package/@sentry/webpack-plugin#options
 
@@ -126,4 +155,8 @@ export default withSentryConfig(nextConfig, {
   // https://docs.sentry.io/product/crons/
   // https://vercel.com/docs/cron-jobs
   automaticVercelMonitors: true,
-});
+};
+
+export default process.env.NODE_ENV === "development"
+  ? nextConfig
+  : withSentryConfig(nextConfig, sentryWebpackOptions);

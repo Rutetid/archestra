@@ -1,5 +1,5 @@
+import { AGENT_TOOL_PREFIX, slugify } from "@archestra/shared";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { AGENT_TOOL_PREFIX, slugify } from "@shared";
 import { z } from "zod";
 import { executeA2AMessage } from "@/agents/a2a-executor";
 import { userHasPermission } from "@/auth/utils";
@@ -115,9 +115,10 @@ export async function handleDelegation(
     return errorResult("Agent not found or not configured for delegation.");
   }
 
-  // Check user has access if user token is being used
-  const userId = tokenAuth?.userId;
-  if (userId && organizationId) {
+  // Check user access when a real caller is available. The caller user can be
+  // present even when the selected gateway token is team/org scoped.
+  const userId = context.userId ?? tokenAuth?.userId;
+  if (userId && userId !== "system" && organizationId) {
     const isAgentAdmin = await userHasPermission(
       userId,
       organizationId,
@@ -158,6 +159,9 @@ export async function handleDelegation(
       parentDelegationChain: context.delegationChain || context.agentId,
       // Propagate conversationId for browser tab isolation
       conversationId: context.conversationId,
+      chatOpsBindingId: context.chatOpsBindingId,
+      chatOpsThreadId: context.chatOpsThreadId,
+      scheduleTriggerRunId: context.scheduleTriggerRunId,
       abortSignal: context.abortSignal,
       // We only need to propagate whether the parent was already unsafe at the
       // delegation boundary. The child re-evaluates its own tool results and

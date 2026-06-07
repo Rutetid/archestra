@@ -12,12 +12,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+interface ReinstallTarget {
+  id: string;
+  name: string;
+}
+
 interface ReinstallConfirmationDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
   serverName: string;
   isReinstalling: boolean;
+  targets?: ReinstallTarget[];
 }
 
 export function ReinstallConfirmationDialog({
@@ -26,20 +32,35 @@ export function ReinstallConfirmationDialog({
   onConfirm,
   serverName,
   isReinstalling,
+  targets = [],
 }: ReinstallConfirmationDialogProps) {
+  const installationCount = targets.length;
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Reinstall Required</DialogTitle>
-          <DialogDescription className="py-4">
+          <DialogDescription>
             The configuration for <strong>{serverName}</strong> has been
-            updated. The server needs to be reinstalled for the changes to take
-            effect.
+            updated.{" "}
+            {installationCount > 0 ? (
+              <>
+                <strong>{installationCount}</strong>{" "}
+                {installationCount === 1 ? "installation" : "installations"}{" "}
+                will be reinstalled for the changes to take effect.
+              </>
+            ) : (
+              <>
+                The server needs to be reinstalled for the changes to take
+                effect.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
+
         <DialogForm onSubmit={onConfirm}>
-          <DialogStickyFooter>
+          <DialogStickyFooter className="border-t-0 shadow-none">
             <Button
               type="button"
               variant="outline"

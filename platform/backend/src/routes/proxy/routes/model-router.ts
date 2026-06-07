@@ -3,7 +3,7 @@ import {
   LLM_PROXY_OAUTH_SCOPE,
   RouteId,
   type SupportedProvider,
-} from "@shared";
+} from "@archestra/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -13,6 +13,7 @@ import {
   AgentTeamModel,
   LlmOauthClientModel,
   LlmProviderApiKeyModel,
+  LlmProviderApiKeyModelLinkModel,
   MemberModel,
   ModelModel,
   OAuthAccessTokenModel,
@@ -36,6 +37,7 @@ import {
   minimaxAdapterFactory,
   mistralAdapterFactory,
   ollamaAdapterFactory,
+  openAiEmbeddingsAdapterFactory,
   openaiAdapterFactory,
   openrouterAdapterFactory,
   perplexityAdapterFactory,
@@ -181,6 +183,7 @@ type TranslatedModelRouterProvider =
 
 const CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
 const RESPONSES_SUFFIX = "/responses";
+const EMBEDDINGS_SUFFIX = "/embeddings";
 
 const openAiWireProviders = {
   openai: openaiAdapterFactory,
@@ -242,11 +245,7 @@ const modelRouterProxyRoutes: FastifyPluginAsyncZod = async (fastify) => {
       const auth = await getModelRouterAuth(request);
       const agent = await getDefaultModelRouterAgent();
       await ensureModelRouterAgentAccess({ agent, auth });
-      return reply.send(
-        await listModels({
-          providers: getMappedProviders(auth),
-        }),
-      );
+      return reply.send(await listModels({ auth }));
     },
   );
 
@@ -268,11 +267,7 @@ const modelRouterProxyRoutes: FastifyPluginAsyncZod = async (fastify) => {
       const auth = await getModelRouterAuth(request);
       const agent = await getModelRouterAgent(request.params.agentId);
       await ensureModelRouterAgentAccess({ agent, auth });
-      return reply.send(
-        await listModels({
-          providers: getMappedProviders(auth),
-        }),
-      );
+      return reply.send(await listModels({ auth }));
     },
   );
 
@@ -314,6 +309,47 @@ const modelRouterProxyRoutes: FastifyPluginAsyncZod = async (fastify) => {
     },
     async (request, reply) => {
       return routeResponse(request, reply);
+    },
+  );
+
+  fastify.post(
+    `${MODEL_ROUTER_PREFIX}${EMBEDDINGS_SUFFIX}`,
+    {
+      bodyLimit: PROXY_BODY_LIMIT,
+      schema: {
+        operationId: RouteId.ModelRouterEmbeddingsWithDefaultAgent,
+        description:
+          "Create embeddings through the OpenAI-compatible model router (default LLM proxy)",
+        tags: ["LLM Proxy"],
+        body: OpenAi.API.EmbeddingRequestSchema,
+        headers: OpenAi.API.ChatCompletionsHeadersSchema,
+        response: constructResponseSchema(OpenAi.API.EmbeddingResponseSchema),
+      },
+    },
+    async (request, reply) => {
+      return routeEmbedding(request, reply);
+    },
+  );
+
+  fastify.post(
+    `${MODEL_ROUTER_PREFIX}/:agentId${EMBEDDINGS_SUFFIX}`,
+    {
+      bodyLimit: PROXY_BODY_LIMIT,
+      schema: {
+        operationId: RouteId.ModelRouterEmbeddingsWithAgent,
+        description:
+          "Create embeddings through the OpenAI-compatible model router (specific LLM proxy)",
+        tags: ["LLM Proxy"],
+        params: z.object({
+          agentId: UuidIdSchema,
+        }),
+        body: OpenAi.API.EmbeddingRequestSchema,
+        headers: OpenAi.API.ChatCompletionsHeadersSchema,
+        response: constructResponseSchema(OpenAi.API.EmbeddingResponseSchema),
+      },
+    },
+    async (request, reply) => {
+      return routeEmbedding(request, reply);
     },
   );
 
@@ -379,6 +415,7 @@ async function routeChatCompletion(
   const resolution = await resolveModelRoute({
     requestedModel: body.model,
     allowedProviders: getMappedProviders(auth),
+    allowedApiKeyIds: getMappedApiKeyIds(auth),
   });
   const routedBody = {
     ...body,
@@ -419,6 +456,7 @@ async function routeResponse(request: FastifyRequest, reply: FastifyReply) {
   const resolution = await resolveModelRoute({
     requestedModel: chatBody.model,
     allowedProviders: getMappedProviders(auth),
+    allowedApiKeyIds: getMappedApiKeyIds(auth),
   });
   const routedChatBody = {
     ...chatBody,
@@ -440,6 +478,46 @@ async function routeResponse(request: FastifyRequest, reply: FastifyReply) {
     responsesContext,
     request,
     reply,
+  );
+}
+
+async function routeEmbedding(request: FastifyRequest, reply: FastifyReply) {
+  const body = request.body as OpenAi.Types.EmbeddingRequest;
+  const params = request.params as { agentId?: string };
+  const auth = await getModelRouterAuth(request);
+  const agent = params.agentId
+    ? await getModelRouterAgent(params.agentId)
+    : await getDefaultModelRouterAgent();
+  await ensureModelRouterAgentAccess({ agent, auth });
+  const resolution = await resolveModelRoute({
+    requestedModel: body.model,
+    capability: "embeddings",
+    allowedProviders: getMappedProviders(auth),
+    allowedApiKeyIds: getMappedApiKeyIds(auth),
+  });
+  if (resolution.provider !== "openai") {
+    throw new ApiError(
+      501,
+      `Provider "${resolution.provider}" is not yet available through the OpenAI-compatible model router embeddings endpoint.`,
+    );
+  }
+
+  const routedBody = {
+    ...body,
+    model: resolution.modelId,
+  };
+
+  await applyModelRouterAuthOverride({
+    request,
+    auth,
+    provider: resolution.provider,
+  });
+
+  return handleLLMProxy(
+    routedBody,
+    request,
+    reply,
+    openAiEmbeddingsAdapterFactory,
   );
 }
 
@@ -571,21 +649,24 @@ function handleModelRouterResponsesProvider(
   }
 }
 
-async function listModels(params: { providers: Set<SupportedProvider> }) {
-  const providers = [...params.providers].filter((provider) =>
-    modelRouterSupportedProviders.has(provider),
-  );
-  const allModels = await ModelModel.findAll({ providers });
+async function listModels(params: { auth: ModelRouterAuth }) {
+  const apiKeyIds = [...params.auth.providerApiKeysByProvider.values()]
+    .filter((mapping) => modelRouterSupportedProviders.has(mapping.provider))
+    .map((mapping) => mapping.providerApiKeyId);
+  const linkedModels =
+    await LlmProviderApiKeyModelLinkModel.getModelsForApiKeyIds(apiKeyIds);
   const chatModels = sortRoutableModels(
-    allModels.filter((model) => {
-      if (!ModelModel.supportsTextChat(model)) {
-        return false;
-      }
-      if (!modelRouterSupportedProviders.has(model.provider)) {
-        return false;
-      }
-      return true;
-    }),
+    linkedModels
+      .map(({ model }) => model)
+      .filter((model) => {
+        if (!modelRouterSupportedProviders.has(model.provider)) {
+          return false;
+        }
+        return (
+          ModelModel.supportsTextChat(model) ||
+          ModelModel.supportsEmbeddings(model)
+        );
+      }),
   );
 
   return {
@@ -706,6 +787,12 @@ function getMappedProviders(auth: ModelRouterAuth): Set<SupportedProvider> {
   return new Set(auth.providerApiKeysByProvider.keys());
 }
 
+function getMappedApiKeyIds(auth: ModelRouterAuth): string[] {
+  return [...auth.providerApiKeysByProvider.values()].map(
+    (mapping) => mapping.providerApiKeyId,
+  );
+}
+
 function isTranslatedModelRouterProvider(
   provider: SupportedProvider,
 ): provider is TranslatedModelRouterProvider {
@@ -818,7 +905,7 @@ async function getModelRouterOAuthClientAuth(
             providerApiKeyId: apiKey.id,
             providerApiKeyName: apiKey.name,
             secretId: apiKey.secretId,
-            baseUrl: apiKey.baseUrl,
+            baseUrl: apiKey.inferenceBaseUrl ?? apiKey.baseUrl,
           },
         ];
       }),
@@ -873,7 +960,7 @@ async function getModelRouterUserOAuthAuth(params: {
       providerApiKeyId: apiKey.id,
       providerApiKeyName: apiKey.name,
       secretId: apiKey.secretId,
-      baseUrl: apiKey.baseUrl,
+      baseUrl: apiKey.inferenceBaseUrl ?? apiKey.baseUrl,
     });
   }
 

@@ -1,5 +1,5 @@
 import AnthropicProvider from "@anthropic-ai/sdk";
-import { ArchestraInternalErrorCode } from "@shared";
+import { ArchestraInternalErrorCode } from "@archestra/shared";
 import { encode as toonEncode } from "@toon-format/toon";
 import { get } from "lodash-es";
 import {
@@ -902,7 +902,7 @@ export async function convertToolResultsToToon(
                   },
                   "convertToolResultsToToon: compressed (string content)",
                 );
-                logger.debug(
+                logger.trace(
                   {
                     toolCallId: contentBlock.tool_use_id,
                     before: noncompressed,
@@ -984,7 +984,7 @@ export async function convertToolResultsToToon(
                       },
                       "convertToolResultsToToon: compressed (array content)",
                     );
-                    logger.debug(
+                    logger.trace(
                       {
                         toolCallId: contentBlock.tool_use_id,
                         before: noncompressed,

@@ -1,4 +1,4 @@
-import { BUILT_IN_AGENT_IDS } from "@shared";
+import { BUILT_IN_AGENT_IDS } from "@archestra/shared";
 import { eq } from "drizzle-orm";
 import { type Mock, vi } from "vitest";
 import {
@@ -486,7 +486,6 @@ describe("clone agent route", () => {
       knowledgeBaseIds: [],
       connectorIds: [],
       llmApiKeyId: null,
-      llmModel: "gpt-4",
     });
 
     const response = await app.inject({
@@ -498,7 +497,6 @@ describe("clone agent route", () => {
     const cloned = response.json() as Agent;
 
     expect(cloned.llmApiKeyId).toBeNull();
-    expect(cloned.llmModel).toBe("gpt-4");
   });
 
   test("clones identityProviderId for MCP gateway", async ({
@@ -778,9 +776,7 @@ describe("clone agent route", () => {
     expect(response.statusCode).toBe(404);
   });
 
-  test("preserves toolExposureMode and toolAssignmentMode in clone", async ({
-    makeInternalAgent,
-  }) => {
+  test("preserves toolExposureMode in clone", async ({ makeInternalAgent }) => {
     const sourceAgent = await makeInternalAgent({
       organizationId,
       name: "Search-Only Agent",
@@ -790,7 +786,6 @@ describe("clone agent route", () => {
       knowledgeBaseIds: [],
       connectorIds: [],
       toolExposureMode: "search_and_run_only",
-      toolAssignmentMode: "automatic",
     });
 
     const response = await app.inject({
@@ -802,6 +797,5 @@ describe("clone agent route", () => {
     const cloned = response.json() as Agent;
 
     expect(cloned.toolExposureMode).toBe("search_and_run_only");
-    expect(cloned.toolAssignmentMode).toBe("automatic");
   });
 });

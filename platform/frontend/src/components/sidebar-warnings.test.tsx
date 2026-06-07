@@ -8,16 +8,11 @@ const mockUseHasPermissions = vi.fn();
 const mockUseFeature = vi.fn();
 const mockUseDisableBasicAuth = vi.fn();
 
-vi.mock("@/lib/clients/auth/auth-client", () => ({
-  authClient: {
-    useSession: (...args: unknown[]) => mockUseSession(...args),
-  },
-}));
-
 vi.mock("@/lib/auth/auth.query", () => ({
   useDefaultCredentialsEnabled: (...args: unknown[]) =>
     mockUseDefaultCredentialsEnabled(...args),
   useHasPermissions: (...args: unknown[]) => mockUseHasPermissions(...args),
+  useSession: (...args: unknown[]) => mockUseSession(...args),
 }));
 
 vi.mock("@/lib/config/config.query", () => ({
@@ -25,7 +20,7 @@ vi.mock("@/lib/config/config.query", () => ({
   useDisableBasicAuth: (...args: unknown[]) => mockUseDisableBasicAuth(...args),
 }));
 
-vi.mock("@shared", () => ({
+vi.mock("@archestra/shared", () => ({
   DEFAULT_ADMIN_EMAIL: "admin@example.com",
   DEFAULT_ADMIN_PASSWORD: "admin",
 }));

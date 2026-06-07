@@ -1,9 +1,4 @@
 import {
-  isSpanContextValid,
-  context as otelContext,
-  trace,
-} from "@opentelemetry/api";
-import {
   AnthropicErrorTypes,
   ArchestraInternalErrorCode,
   BedrockErrorTypes,
@@ -18,7 +13,12 @@ import {
   type SupportedProvider,
   VllmErrorTypes,
   ZhipuaiErrorTypes,
-} from "@shared";
+} from "@archestra/shared";
+import {
+  isSpanContextValid,
+  context as otelContext,
+  trace,
+} from "@opentelemetry/api";
 import { APICallError, NoOutputGeneratedError, RetryError } from "ai";
 import logger from "@/logging";
 import { getActiveSessionId } from "@/observability/request-context";
@@ -37,6 +37,26 @@ export class ProviderError extends Error {
     );
     this.name = "ProviderError";
     this.chatErrorResponse = chatErrorResponse;
+  }
+}
+
+/**
+ * Thrown when the provider finishes a turn cleanly (finishReason stop/length)
+ * but produces no renderable content, after the empty-response auto-retries are
+ * exhausted (or immediately for a non-retryable finishReason). Carries the last
+ * finishReason for diagnostics. mapProviderError turns it into a structured
+ * error card: a content-filter finish becomes the non-retryable ContentFiltered
+ * card, everything else the retryable EmptyResponse card.
+ */
+export class EmptyModelResponseError extends Error {
+  public readonly finishReason: string;
+  public readonly attempts: number;
+
+  constructor(params: { finishReason: string; attempts: number }) {
+    super(`Model returned an empty response after ${params.attempts} attempts`);
+    this.name = "EmptyModelResponseError";
+    this.finishReason = params.finishReason;
+    this.attempts = params.attempts;
   }
 }
 
@@ -185,6 +205,26 @@ function extractArchestraInternalCode(
     // Not JSON — fall through.
   }
   return undefined;
+}
+
+function extractUsageLimitError(
+  responseBody: string | undefined,
+): { entityType?: string } | null {
+  if (!responseBody) return null;
+  try {
+    const parsed = JSON.parse(responseBody);
+    if (parsed?.error?.code !== "token_cost_limit_exceeded") {
+      return null;
+    }
+    return {
+      entityType:
+        typeof parsed.error.usage_limit?.entity_type === "string"
+          ? parsed.error.usage_limit.entity_type
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // =============================================================================
@@ -487,10 +527,11 @@ function parseGeminiError(responseBody: string): ParsedGeminiError | null {
         message:
           typeof errorObj.message === "string"
             ? errorObj.message
-            : typeof parsed?.error === "object"
-              ? ((parsed.error as Record<string, unknown>).message as
-                  | string
-                  | undefined)
+            : typeof parsed?.error === "object" &&
+                parsed.error !== null &&
+                typeof (parsed.error as Record<string, unknown>).message ===
+                  "string"
+              ? ((parsed.error as Record<string, unknown>).message as string)
               : undefined,
         details: Array.isArray(details) ? details : undefined,
         // Extract ErrorInfo for specific error reason mapping
@@ -1327,10 +1368,21 @@ function findDeepestMessage(obj: unknown, depth = 0): string | null {
     if (deeper) return deeper;
   }
 
+  if (
+    typeof record.error_description === "string" &&
+    record.error_description.length > 0
+  ) {
+    return record.error_description;
+  }
+
   // Recurse into error object
   if (typeof record.error === "object" && record.error !== null) {
     const deeper = findDeepestMessage(record.error, depth + 1);
     if (deeper) return deeper;
+  }
+
+  if (typeof record.error === "string" && record.error.length > 0) {
+    return record.error;
   }
 
   // If we have a message that looks like JSON, still return it as fallback
@@ -1363,7 +1415,7 @@ function extractErrorMessage(
   }
 
   // Then try to get message from parsed error
-  if (parsedError?.message) {
+  if (typeof parsedError?.message === "string") {
     return parsedError.message;
   }
 
@@ -1401,10 +1453,13 @@ function createErrorResponse(
   originalMessage: string,
   errorType: string | undefined,
   rawError: unknown,
+  usageLimitError?: { entityType?: string } | null,
 ): ChatErrorResponse {
-  return {
+  const response: ChatErrorResponse = {
     code,
-    message: ChatErrorMessages[code],
+    message: usageLimitError
+      ? formatUsageLimitMessage(usageLimitError.entityType)
+      : ChatErrorMessages[code],
     isRetryable: RetryableErrorCodes.has(code),
     originalError: {
       provider,
@@ -1414,6 +1469,11 @@ function createErrorResponse(
       raw: safeSerialize(rawError),
     },
   };
+  if (usageLimitError) {
+    response.usageLimitExceeded = true;
+    response.usageLimitEntityType = usageLimitError.entityType;
+  }
+  return response;
 }
 
 /**
@@ -1463,6 +1523,28 @@ export function mapProviderError(
           : undefined,
       };
     }
+  }
+
+  // Handle EmptyModelResponseError — the provider finished cleanly but gave no
+  // content, and the empty-response retries were exhausted. Surface it as a
+  // structured, retryable EmptyResponse error.
+  if (error instanceof EmptyModelResponseError) {
+    // A content-filter finish is a deterministic block, not a transient empty
+    // turn — surface it as the non-retryable ContentFiltered card so the UI
+    // doesn't offer a pointless retry. Exhausted stop/length/unknown turns stay
+    // the retryable EmptyResponse.
+    const code =
+      error.finishReason === "content-filter"
+        ? ChatErrorCode.ContentFiltered
+        : ChatErrorCode.EmptyResponse;
+    return createErrorResponse(
+      code,
+      provider,
+      undefined,
+      ChatErrorMessages[code],
+      "EmptyModelResponseError",
+      { finishReason: error.finishReason, attempts: error.attempts },
+    );
   }
 
   // Handle NoOutputGeneratedError — the provider failed before producing any
@@ -1516,6 +1598,11 @@ export function mapProviderError(
 
   // Map to error code using provider-specific mapper
   let errorCode = mapError(statusCode, parsedError);
+  const isTerminatedStream = isStreamTerminatedError(error);
+
+  if (isTerminatedStream) {
+    errorCode = ChatErrorCode.NetworkError;
+  }
 
   // An Archestra-normalized `internal_code` emitted by the adapter's
   // extractInternalCode takes precedence over the per-provider mapper. This
@@ -1525,6 +1612,7 @@ export function mapProviderError(
   if (normalizedCode === ArchestraInternalErrorCode.ContextLengthExceeded) {
     errorCode = ChatErrorCode.ContextTooLong;
   }
+  const usageLimitError = extractUsageLimitError(responseBody);
 
   // Extract the most meaningful error message
   const errorMessage = extractErrorMessage(parsedError, responseBody, error);
@@ -1537,15 +1625,17 @@ export function mapProviderError(
     (error instanceof Error ? error.name : undefined);
   const rawErrorJson = stringifyRawError(error);
 
-  captureRawProviderErrorInSentry({
-    provider,
-    statusCode,
-    parsedError,
-    errorCode,
-    errorMessage,
-    errorType,
-    rawErrorJson,
-  });
+  if (!isTerminatedStream) {
+    captureRawProviderErrorInSentry({
+      provider,
+      statusCode,
+      parsedError,
+      errorCode,
+      errorMessage,
+      errorType,
+      rawErrorJson,
+    });
+  }
 
   logger.info(
     {
@@ -1563,7 +1653,9 @@ export function mapProviderError(
     errorCode,
     provider,
     statusCode,
-    errorMessage,
+    isTerminatedStream
+      ? "Upstream provider closed the connection unexpectedly"
+      : errorMessage,
     errorType,
     {
       url: APICallError.isInstance(error)
@@ -1575,7 +1667,14 @@ export function mapProviderError(
         ? (error as InstanceType<typeof APICallError>).isRetryable
         : undefined,
     },
+    usageLimitError,
   );
+}
+
+function isStreamTerminatedError(error: unknown): boolean {
+  // Node.js/undici stream termination can surface as a bare Error("terminated")
+  // when an upstream streamed response closes before the AI SDK finishes reading it.
+  return error instanceof Error && error.message === "terminated";
 }
 
 /**
@@ -1610,7 +1709,7 @@ export function getActiveTraceContext(): {
 export function sanitizeChatErrorForFrontend(
   error: ChatErrorResponse,
 ): ChatErrorResponse {
-  return {
+  const sanitized: ChatErrorResponse = {
     code: error.code,
     message: error.message,
     isRetryable: error.isRetryable,
@@ -1618,4 +1717,16 @@ export function sanitizeChatErrorForFrontend(
     traceId: error.traceId,
     spanId: error.spanId,
   };
+  if (error.usageLimitExceeded) {
+    sanitized.usageLimitExceeded = true;
+    sanitized.usageLimitEntityType = error.usageLimitEntityType;
+  }
+  return sanitized;
+}
+
+function formatUsageLimitMessage(entityType: string | undefined): string {
+  if (!entityType) {
+    return "A usage limit budget has been exceeded.";
+  }
+  return `The ${entityType.replace(/_/g, " ")} usage limit budget has been exceeded.`;
 }

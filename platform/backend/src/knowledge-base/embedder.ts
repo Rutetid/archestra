@@ -1,4 +1,4 @@
-import { addNomicTaskPrefix, EMBEDDING_BATCH_SIZE } from "@shared";
+import { addNomicTaskPrefix, EMBEDDING_BATCH_SIZE } from "@archestra/shared";
 import logger from "@/logging";
 import { KbChunkModel, KbDocumentModel } from "@/models";
 import {
@@ -6,6 +6,7 @@ import {
   type EmbeddingApiResponse,
   type EmbeddingInput,
   getEmbeddingDiscriminator,
+  getEmbeddingRetryDelayMs,
   isRetryableEmbeddingError,
 } from "./embedding-clients";
 import {
@@ -294,7 +295,10 @@ class EmbeddingService {
           throw error;
         }
 
-        const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        const delayMs = getEmbeddingRetryDelayMs(
+          error,
+          RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+        );
         logger.warn(
           {
             attempt,

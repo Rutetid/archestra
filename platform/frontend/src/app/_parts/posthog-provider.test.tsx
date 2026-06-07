@@ -1,19 +1,26 @@
 import { render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useSession } from "@/lib/auth/auth.query";
 import { usePublicConfig } from "@/lib/config/config.query";
 import { PostHogProviderWrapper } from "./posthog-provider";
 
-const { mockIdentify, mockInit, mockReset } = vi.hoisted(() => ({
-  mockIdentify: vi.fn(),
-  mockInit: vi.fn(),
-  mockReset: vi.fn(),
-}));
+const DEFAULT_INSTANCE_ID = "00000000-0000-4000-8000-000000000001";
+
+const { mockGroup, mockIdentify, mockInit, mockRegister, mockReset } =
+  vi.hoisted(() => ({
+    mockGroup: vi.fn(),
+    mockIdentify: vi.fn(),
+    mockInit: vi.fn(),
+    mockRegister: vi.fn(),
+    mockReset: vi.fn(),
+  }));
 
 vi.mock("posthog-js", () => ({
   default: {
+    group: mockGroup,
     identify: mockIdentify,
     init: mockInit,
+    register: mockRegister,
     reset: mockReset,
   },
 }));
@@ -27,10 +34,8 @@ vi.mock("posthog-js/react", () => ({
   }) => <>{children}</>,
 }));
 
-vi.mock("@/lib/clients/auth/auth-client", () => ({
-  authClient: {
-    useSession: vi.fn(),
-  },
+vi.mock("@/lib/auth/auth.query", () => ({
+  useSession: vi.fn(),
 }));
 
 vi.mock("@/lib/config/config.query", () => ({
@@ -62,17 +67,19 @@ describe("PostHogProviderWrapper", () => {
       isRefetching: false,
       error: null,
       refetch: vi.fn(),
-    }) as unknown as ReturnType<typeof authClient.useSession>;
+    }) as unknown as ReturnType<typeof useSession>;
 
   const makePublicConfigResult = ({
     enabled,
     key,
     host,
+    instanceId = DEFAULT_INSTANCE_ID,
     isLoading = false,
   }: {
     enabled: boolean;
     key: string;
     host: string;
+    instanceId?: string | null;
     isLoading?: boolean;
   }) =>
     ({
@@ -83,6 +90,7 @@ describe("PostHogProviderWrapper", () => {
             disableInvitations: false,
             analytics: {
               enabled,
+              instanceId,
               posthog: {
                 key,
                 host,
@@ -93,7 +101,7 @@ describe("PostHogProviderWrapper", () => {
     }) as unknown as ReturnType<typeof usePublicConfig>;
 
   it("initializes PostHog and identifies the authenticated user", async () => {
-    vi.mocked(authClient.useSession).mockReturnValue(
+    vi.mocked(useSession).mockReturnValue(
       makeSessionResult({
         data: {
           user: {
@@ -124,8 +132,40 @@ describe("PostHogProviderWrapper", () => {
         email: "user@example.com",
         name: "Example User",
       });
+      expect(mockRegister).toHaveBeenCalledWith({
+        instance_id: DEFAULT_INSTANCE_ID,
+      });
+      expect(mockGroup).toHaveBeenCalledWith("instance", DEFAULT_INSTANCE_ID);
     });
     expect(mockReset).not.toHaveBeenCalled();
+  });
+
+  it("does not register the same instance again when config refreshes", async () => {
+    vi.mocked(useSession).mockReturnValue(
+      makeSessionResult({
+        data: null,
+      }),
+    );
+
+    const { rerender } = render(
+      <PostHogProviderWrapper>
+        <div>child</div>
+      </PostHogProviderWrapper>,
+    );
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledTimes(1);
+      expect(mockGroup).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(
+      <PostHogProviderWrapper>
+        <div>child</div>
+      </PostHogProviderWrapper>,
+    );
+
+    expect(mockRegister).toHaveBeenCalledTimes(1);
+    expect(mockGroup).toHaveBeenCalledTimes(1);
   });
 
   it("does not identify the same user again when session data refreshes", async () => {
@@ -138,7 +178,7 @@ describe("PostHogProviderWrapper", () => {
       session: { id: "session-123" },
     };
 
-    vi.mocked(authClient.useSession).mockImplementation(() =>
+    vi.mocked(useSession).mockImplementation(() =>
       makeSessionResult({ data: sessionData }),
     );
 
@@ -182,7 +222,7 @@ describe("PostHogProviderWrapper", () => {
       session: { id: "session-123" },
     };
 
-    vi.mocked(authClient.useSession).mockImplementation(() =>
+    vi.mocked(useSession).mockImplementation(() =>
       makeSessionResult({ data: sessionData }),
     );
 
@@ -224,7 +264,7 @@ describe("PostHogProviderWrapper", () => {
   });
 
   it("uses the email as the fallback name when the user has no display name", async () => {
-    vi.mocked(authClient.useSession).mockReturnValue(
+    vi.mocked(useSession).mockReturnValue(
       makeSessionResult({
         data: {
           user: {
@@ -261,7 +301,7 @@ describe("PostHogProviderWrapper", () => {
       session: { id: "session-123" },
     };
 
-    vi.mocked(authClient.useSession).mockImplementation(() =>
+    vi.mocked(useSession).mockImplementation(() =>
       makeSessionResult({ data: sessionData }),
     );
 
@@ -286,6 +326,8 @@ describe("PostHogProviderWrapper", () => {
     await waitFor(() => {
       expect(mockReset).toHaveBeenCalledTimes(1);
     });
+    expect(mockRegister).toHaveBeenCalledTimes(2);
+    expect(mockGroup).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing when analytics is disabled", async () => {
@@ -297,7 +339,7 @@ describe("PostHogProviderWrapper", () => {
       }),
     );
 
-    vi.mocked(authClient.useSession).mockReturnValue(
+    vi.mocked(useSession).mockReturnValue(
       makeSessionResult({
         data: {
           user: {
@@ -319,7 +361,9 @@ describe("PostHogProviderWrapper", () => {
     await waitFor(() => {
       expect(mockInit).not.toHaveBeenCalled();
     });
+    expect(mockGroup).not.toHaveBeenCalled();
     expect(mockIdentify).not.toHaveBeenCalled();
+    expect(mockRegister).not.toHaveBeenCalled();
     expect(mockReset).not.toHaveBeenCalled();
   });
 
@@ -332,7 +376,7 @@ describe("PostHogProviderWrapper", () => {
       }),
     );
 
-    vi.mocked(authClient.useSession).mockReturnValue(
+    vi.mocked(useSession).mockReturnValue(
       makeSessionResult({
         data: {
           user: {
@@ -354,12 +398,14 @@ describe("PostHogProviderWrapper", () => {
     await waitFor(() => {
       expect(mockInit).not.toHaveBeenCalled();
     });
+    expect(mockGroup).not.toHaveBeenCalled();
     expect(mockIdentify).not.toHaveBeenCalled();
+    expect(mockRegister).not.toHaveBeenCalled();
     expect(mockReset).not.toHaveBeenCalled();
   });
 
   it("does not reset PostHog while the auth session is still loading", async () => {
-    vi.mocked(authClient.useSession).mockReturnValue(
+    vi.mocked(useSession).mockReturnValue(
       makeSessionResult({
         data: null,
         isPending: true,

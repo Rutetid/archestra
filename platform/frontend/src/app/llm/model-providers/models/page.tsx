@@ -3,11 +3,12 @@
 import {
   type archestraApiTypes,
   INPUT_MODALITY_OPTIONS,
+  isOpenRouterLatestAlias,
   type ModelInputModality,
   type ModelOutputModality,
   OUTPUT_MODALITY_OPTIONS,
   SUPPORTED_EMBEDDING_DIMENSIONS,
-} from "@shared";
+} from "@archestra/shared";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   AlertCircle,
@@ -26,12 +27,13 @@ import {
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
+import { LlmProviderApiKeyDropdown } from "@/components/llm-provider-api-key-dropdown";
 import { PROVIDER_CONFIG } from "@/components/llm-provider-api-key-form";
-import { LlmProviderApiKeyFilterSelect } from "@/components/llm-provider-options";
 import {
   BestModelBadge,
   EmbeddingModelBadge,
-  FastestModelBadge,
+  FreeModelBadge,
+  LatestModelBadge,
   UnknownCapabilitiesBadge,
 } from "@/components/model-badges";
 import { SearchInput } from "@/components/search-input";
@@ -50,6 +52,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Select,
@@ -60,6 +63,12 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAppName } from "@/lib/hooks/use-app-name";
 import {
   type ModelWithApiKeys,
@@ -68,7 +77,15 @@ import {
   useUpdateModel,
 } from "@/lib/llm-models.query";
 import { useLlmProviderApiKeys } from "@/lib/llm-provider-api-keys.query";
+import { formatContextLength } from "@/lib/utils";
 import { useSetModelProvidersAction } from "../layout";
+import {
+  canFilterFreeModelsForApiKey,
+  filterModelsForPage,
+  type ModelsPageModelTypeFilter,
+  OBSERVED_MODEL_SOURCE_DESCRIPTION,
+  OBSERVED_MODEL_SOURCE_LABEL,
+} from "./models-page-utils";
 
 export default function ModelsPage() {
   const { data: models = [], isPending, refetch } = useModelsWithApiKeys();
@@ -78,36 +95,13 @@ export default function ModelsPage() {
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [search, setSearch] = useState("");
   const [apiKeyFilter, setApiKeyFilter] = useState<string>("all");
-  const [modelTypeFilter, setModelTypeFilter] = useState<
-    "all" | "chat" | "embedding"
-  >("all");
+  const [apiKeyFilterOpen, setApiKeyFilterOpen] = useState(false);
+  const [modelTypeFilter, setModelTypeFilter] =
+    useState<ModelsPageModelTypeFilter>("all");
+  const [freeOnly, setFreeOnly] = useState(false);
   const [editingModel, setEditingModel] = useState<ModelWithApiKeys | null>(
     null,
   );
-
-  const filteredModels = useMemo(() => {
-    let result = models;
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter((m) => m.modelId.toLowerCase().includes(q));
-    }
-    if (apiKeyFilter !== "all") {
-      result = result.filter((m) =>
-        m.apiKeys.some((k) => k.id === apiKeyFilter),
-      );
-    }
-    if (modelTypeFilter === "embedding") {
-      result = result.filter((m) => m.embeddingDimensions !== null);
-    } else if (modelTypeFilter === "chat") {
-      result = result.filter((m) => m.embeddingDimensions === null);
-    }
-    // Stable sort so rows don't jump when data refetches after edits
-    return [...result].sort(
-      (a, b) =>
-        a.provider.localeCompare(b.provider) ||
-        a.modelId.localeCompare(b.modelId),
-    );
-  }, [models, search, apiKeyFilter, modelTypeFilter]);
 
   const availableApiKeys = useMemo(() => {
     const keyMap = new Map<
@@ -127,6 +121,37 @@ export default function ModelsPage() {
     );
   }, [models]);
 
+  const canFilterFreeModels = useMemo(
+    () => canFilterFreeModelsForApiKey({ availableApiKeys, apiKeyFilter }),
+    [availableApiKeys, apiKeyFilter],
+  );
+
+  useEffect(() => {
+    if (!canFilterFreeModels && freeOnly) {
+      setFreeOnly(false);
+    }
+  }, [canFilterFreeModels, freeOnly]);
+
+  const filteredModels = useMemo(
+    () =>
+      filterModelsForPage({
+        models,
+        search,
+        apiKeyFilter,
+        modelTypeFilter,
+        freeOnly,
+        canFilterFreeModels,
+      }),
+    [
+      models,
+      search,
+      apiKeyFilter,
+      modelTypeFilter,
+      freeOnly,
+      canFilterFreeModels,
+    ],
+  );
+
   const handleRefresh = useCallback(async () => {
     setIsRefreshingModels(true);
     try {
@@ -140,7 +165,12 @@ export default function ModelsPage() {
   const setModelProvidersAction = useSetModelProvidersAction();
   useEffect(() => {
     setModelProvidersAction(
-      <Button onClick={handleRefresh} disabled={isRefreshingModels}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleRefresh}
+        disabled={isRefreshingModels}
+      >
         <RefreshCw
           className={`h-4 w-4 ${isRefreshingModels ? "animate-spin" : ""}`}
         />
@@ -176,18 +206,23 @@ export default function ModelsPage() {
         accessorKey: "modelId",
         size: 280,
         header: "Model ID",
-        cell: ({ row }) => (
-          <div className="min-w-0 space-y-2">
-            <span className="font-mono text-sm">{row.original.modelId}</span>
-            <div className="mt-0.5 flex flex-wrap items-center gap-2">
-              {row.original.isFastest && <FastestModelBadge />}
-              {row.original.isBest && <BestModelBadge />}
-              {row.original.embeddingDimensions !== null && (
-                <EmbeddingModelBadge />
-              )}
+        cell: ({ row }) => {
+          const { modelId, provider, isFree } = row.original;
+          const isLatestAlias = isOpenRouterLatestAlias(provider, modelId);
+          return (
+            <div className="min-w-0 space-y-2">
+              <span className="font-mono text-sm">{modelId}</span>
+              <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                {isFree && <FreeModelBadge />}
+                {isLatestAlias && <LatestModelBadge />}
+                {row.original.isBest && <BestModelBadge />}
+                {row.original.embeddingDimensions !== null && (
+                  <EmbeddingModelBadge />
+                )}
+              </div>
             </div>
-          </div>
-        ),
+          );
+        },
       },
       {
         accessorKey: "apiKeys",
@@ -197,10 +232,19 @@ export default function ModelsPage() {
           if (apiKeys.length === 0) {
             if (row.original.discoveredViaLlmProxy) {
               return (
-                <Badge variant="secondary" className="text-xs gap-1">
-                  <ArrowLeftRight className="h-3 w-3 shrink-0" />
-                  <span>LLM Proxy</span>
-                </Badge>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge variant="secondary" className="text-xs gap-1">
+                        <ArrowLeftRight className="h-3 w-3 shrink-0" />
+                        <span>{OBSERVED_MODEL_SOURCE_LABEL}</span>
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-xs">
+                      <p>{OBSERVED_MODEL_SOURCE_DESCRIPTION}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               );
             }
             return <span className="text-sm text-muted-foreground">-</span>;
@@ -309,23 +353,36 @@ export default function ModelsPage() {
               onSearchChange={setSearch}
               syncQueryParams={false}
             />
-            <LlmProviderApiKeyFilterSelect
-              value={apiKeyFilter}
-              onValueChange={setApiKeyFilter}
-              allLabel="All provider API keys"
-              className="w-full sm:w-[280px]"
-              options={availableApiKeys.flatMap(([id, { name, provider }]) => {
-                const config = PROVIDER_CONFIG[provider];
-                if (!config) return [];
-                return [
-                  {
-                    value: id,
-                    icon: config.icon,
-                    providerName: config.name,
-                    keyName: name,
-                  },
-                ];
-              })}
+            <LlmProviderApiKeyDropdown
+              availableKeys={availableApiKeys.flatMap(
+                ([id, { name, provider }]) => {
+                  const config = PROVIDER_CONFIG[provider];
+                  if (!config) return [];
+                  return [
+                    {
+                      id,
+                      name,
+                      provider,
+                    },
+                  ];
+                },
+              )}
+              selectedApiKeyId={apiKeyFilter === "all" ? null : apiKeyFilter}
+              open={apiKeyFilterOpen}
+              onOpenChange={setApiKeyFilterOpen}
+              onSelectKey={(value) => {
+                setApiKeyFilter(value);
+                setApiKeyFilterOpen(false);
+              }}
+              triggerVariant="select"
+              triggerClassName="w-full sm:w-[280px] h-9 text-sm"
+              popoverClassName="w-[var(--radix-popover-trigger-width)]"
+              allOptionLabel="All provider API keys"
+              allOptionSelected={apiKeyFilter === "all"}
+              onSelectAllOption={() => {
+                setApiKeyFilter("all");
+                setApiKeyFilterOpen(false);
+              }}
             />
             <SearchableSelect
               value={modelTypeFilter}
@@ -385,6 +442,21 @@ export default function ModelsPage() {
                 },
               ]}
             />
+            {canFilterFreeModels && (
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="models-free-only"
+                  checked={freeOnly}
+                  onCheckedChange={setFreeOnly}
+                />
+                <Label
+                  htmlFor="models-free-only"
+                  className="text-sm text-muted-foreground"
+                >
+                  Free only
+                </Label>
+              </div>
+            )}
           </div>
         )}
         <DataTable
@@ -397,13 +469,17 @@ export default function ModelsPage() {
           hideSelectedCount
           isLoading={isPending}
           hasActiveFilters={Boolean(
-            search || apiKeyFilter !== "all" || modelTypeFilter !== "all",
+            search ||
+              apiKeyFilter !== "all" ||
+              modelTypeFilter !== "all" ||
+              (canFilterFreeModels && freeOnly),
           )}
           filteredEmptyMessage="No models match your filters. Try adjusting your search."
           onClearFilters={() => {
             setSearch("");
             setApiKeyFilter("all");
             setModelTypeFilter("all");
+            setFreeOnly(false);
           }}
           emptyMessage={
             apiKeys.length === 0
@@ -905,17 +981,6 @@ function ModalitySelectField<T extends string>(params: {
       </div>
     </div>
   );
-}
-
-function formatContextLength(contextLength: number | null): string {
-  if (contextLength === null) return "-";
-  if (contextLength >= 1000000) {
-    return `${(contextLength / 1000000).toFixed(contextLength % 1000000 === 0 ? 0 : 1)}M`;
-  }
-  if (contextLength >= 1000) {
-    return `${(contextLength / 1000).toFixed(contextLength % 1000 === 0 ? 0 : 1)}K`;
-  }
-  return contextLength.toString();
 }
 
 function hasUnknownCapabilities(model: ModelWithApiKeys): boolean {

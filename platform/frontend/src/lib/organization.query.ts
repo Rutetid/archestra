@@ -2,12 +2,14 @@ import {
   type AnyRoleName,
   archestraApiSdk,
   type archestraApiTypes,
-} from "@shared";
+} from "@archestra/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Invitation } from "better-auth/plugins/organization";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { useSession } from "@/lib/auth/auth.query";
 import { authClient } from "@/lib/clients/auth/auth-client";
+import { environmentKeys } from "./environment.query";
 import { handleApiError } from "./utils";
 
 export const appearanceKeys = {
@@ -19,7 +21,8 @@ export const appearanceKeys = {
  * Hook to fetch public appearance settings.
  * Used on login/auth pages where the user is not yet authenticated.
  * Returns theme, customFont, and logo without requiring authentication.
- * On API failure, returns undefined (treated as not loaded) to preserve localStorage values.
+ * On API failure, returns null so React Query has a defined cache value while
+ * callers keep using local fallback appearance values.
  */
 export function useAppearanceSettings(enabled = true) {
   return useQuery({
@@ -28,7 +31,7 @@ export function useAppearanceSettings(enabled = true) {
       const { data, error } = await archestraApiSdk.getAppearanceSettings();
 
       if (error || !data) {
-        return undefined;
+        return null;
       }
 
       return data;
@@ -61,18 +64,16 @@ export const organizationKeys = {
  * Fetch invitation details by ID
  */
 export function useInvitation(invitationId: string) {
-  const session = authClient.useSession();
+  const session = useSession();
   return useQuery({
     queryKey: organizationKeys.invitation(invitationId),
     queryFn: async () => {
-      if (!session) {
-        return undefined;
-      }
       const response = await authClient.organization.getInvitation({
         query: { id: invitationId },
       });
       return response.data;
     },
+    enabled: !!session.data?.user,
   });
 }
 
@@ -254,7 +255,7 @@ export function useCreateInvitation(organizationId: string | undefined) {
  * Get organization
  */
 export function useOrganization(enabled = true) {
-  const session = authClient.useSession();
+  const session = useSession();
 
   return useQuery({
     queryKey: organizationKeys.details(),
@@ -266,6 +267,10 @@ export function useOrganization(enabled = true) {
     enabled: enabled && !!session.data?.user,
     retry: false, // Don't retry on auth pages to avoid repeated 401 errors
     throwOnError: false, // Don't throw errors to prevent crashes
+    // Org settings (theme, app name, etc.) change rarely and all mutations
+    // imperatively setQueryData() this key, so a long stale time keeps
+    // re-mounts cheap.
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -333,6 +338,7 @@ export function useUpdateAppearanceSettings(
         logoDark: updatedOrganization.logoDark,
         favicon: updatedOrganization.favicon,
         iconLogo: updatedOrganization.iconLogo,
+        iconLogoDark: updatedOrganization.iconLogoDark,
         appName: updatedOrganization.appName,
         ogDescription: updatedOrganization.ogDescription,
         footerText: updatedOrganization.footerText,
@@ -466,6 +472,56 @@ export function useUpdateConnectionSettings(
       toast.success(onSuccessMessage);
     },
   });
+}
+
+/**
+ * Update the org-wide default environment (the implicit "Default" target that
+ * catalog items use when no environment is assigned). Unlike real environments,
+ * the default has no slug, so both its name and namespace are freely editable.
+ * Pass `name`/`namespace` (or null to reset to the built-in "Default").
+ */
+export function useUpdateDefaultEnvironment(
+  onSuccessMessage: string,
+  onErrorMessage: string,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      data: archestraApiTypes.UpdateDefaultEnvironmentData["body"],
+    ) => {
+      const { data: updatedOrganization, error } =
+        await archestraApiSdk.updateDefaultEnvironment({ body: data });
+
+      if (error) {
+        toast.error(onErrorMessage);
+        return null;
+      }
+
+      return updatedOrganization;
+    },
+    onSuccess: (updatedOrganization) => {
+      if (!updatedOrganization) return;
+      queryClient.setQueryData(organizationKeys.details(), updatedOrganization);
+      queryClient.invalidateQueries({ queryKey: environmentKeys.list() });
+      toast.success(onSuccessMessage);
+    },
+  });
+}
+
+/**
+ * Returns the org-configured default environment fields. When unconfigured,
+ * `name` falls back to "Default", nullable fields fall back to null, and
+ * `restricted` falls back to false.
+ */
+export function useDefaultEnvironment() {
+  const { data: organization } = useOrganization();
+  return {
+    name: organization?.defaultEnvironmentName ?? "Default",
+    namespace: organization?.defaultEnvironmentNamespace ?? null,
+    description: organization?.defaultEnvironmentDescription ?? null,
+    networkPolicy: organization?.defaultNetworkPolicy ?? null,
+    restricted: organization?.defaultEnvironmentRestricted ?? false,
+  };
 }
 
 /**

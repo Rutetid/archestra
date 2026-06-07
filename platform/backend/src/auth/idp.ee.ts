@@ -1,4 +1,4 @@
-import { MEMBER_ROLE_NAME } from "@shared";
+import { MEMBER_ROLE_NAME } from "@archestra/shared";
 import { APIError } from "better-auth";
 import { jwtDecode } from "jwt-decode";
 import {
@@ -214,6 +214,26 @@ export async function syncSsoRole(
     logger.debug(
       { providerId, userEmail, organizationId: idpProvider.organizationId },
       "[syncSsoRole] User has no membership in organization, skipping role sync",
+    );
+    return;
+  }
+
+  // Only apply the resolved role when a mapping rule explicitly matched.
+  // When no rule matched, evaluateRoleMapping falls back to defaultRole (or
+  // the function-level fallback), which would silently overwrite an existing
+  // member's role on every SSO callback — e.g. demoting an admin to "member"
+  // just because the IdP has no role-mapping rules configured. Provisioning
+  // of brand-new memberships is handled by ssoConfig.organizationProvisioning,
+  // so here we only sync established members when there is an actual match.
+  if (!result.matched) {
+    logger.debug(
+      {
+        providerId,
+        userEmail,
+        currentRole: existingMember.role,
+        fallbackRole: result.role,
+      },
+      "[syncSsoRole] No role mapping rule matched - leaving existing role unchanged",
     );
     return;
   }

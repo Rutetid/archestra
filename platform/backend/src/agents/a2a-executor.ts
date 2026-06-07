@@ -3,7 +3,7 @@ import {
   buildUserSystemPromptContext,
   type InteractionSource,
   PLAYWRIGHT_MCP_CATALOG_ID,
-} from "@shared";
+} from "@archestra/shared";
 import type { ModelMessage, UIMessage, UserContent } from "ai";
 import {
   consumeStream as consumeReadableStream,
@@ -168,7 +168,7 @@ export async function executeA2AMessage(
     await resolveConversationLlmSelectionForAgent({
       agent: {
         llmApiKeyId: agent.llmApiKeyId,
-        llmModel: agent.llmModel,
+        modelId: agent.modelId,
       },
       organizationId,
       userId,
@@ -182,7 +182,7 @@ export async function executeA2AMessage(
   if (promptNeedsRendering(agent.systemPrompt)) {
     const [userDetails, userTeams] = await Promise.all([
       UserModel.getById(userId),
-      TeamModel.getUserTeams(userId),
+      TeamModel.getUserTeamsForOrganization({ userId, organizationId }),
     ]);
     promptContext = buildUserSystemPromptContext({
       userName: userDetails?.name ?? "",

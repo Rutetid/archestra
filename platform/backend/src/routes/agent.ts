@@ -1,10 +1,12 @@
 import {
+  type AgentType,
   createPaginatedResponseSchema,
+  isModelSelectionComplete,
   LABELS_ENTRY_DELIMITER,
   LABELS_VALUE_DELIMITER,
   PaginationQuerySchema,
   RouteId,
-} from "@shared";
+} from "@archestra/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import {
@@ -12,6 +14,7 @@ import {
   hasAnyAgentTypeReadPermission,
   requireAgentModifyPermission,
 } from "@/auth";
+import type { AgentTypePermissionChecker } from "@/auth/agent-type-permissions";
 import { knowledgeSourceAccessControlService } from "@/knowledge-base";
 import {
   AgentLabelModel,
@@ -113,6 +116,12 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
               .describe(
                 "Hide personal agents owned by other users. Admin-only; no-op for non-admins.",
               ),
+            status: z
+              .enum(["active", "deleted"])
+              .optional()
+              .describe(
+                "Filter by lifecycle status. Deleted rows require delete permission.",
+              ),
           })
           .merge(PaginationQuerySchema)
           .merge(
@@ -142,6 +151,7 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
           excludeAuthorIds,
           labels,
           excludeOtherPersonalAgents,
+          status,
           limit,
           offset,
           sortBy,
@@ -162,14 +172,11 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
         organizationId,
       });
 
-      // Check read permission for the requested agent type(s)
-      if (effectiveTypes) {
-        for (const type of effectiveTypes) {
-          checker.require(type, "read");
-        }
-      } else if (!checker.hasAnyReadPermission()) {
-        throw new ApiError(403, "Forbidden");
-      }
+      const permittedTypes = getPermittedAgentTypesForList({
+        checker,
+        effectiveTypes,
+        status,
+      });
 
       // Check admin for the specific type(s) being queried, or any type if unfiltered
       const isAdmin = effectiveTypes
@@ -185,8 +192,8 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
           {
             name,
             // agentTypes takes precedence over agentType
-            agentType: agentTypes ? undefined : agentType,
-            agentTypes,
+            agentType: agentTypes || permittedTypes ? undefined : agentType,
+            agentTypes: permittedTypes ?? agentTypes,
             scope,
             teamIds,
             // authorIds and excludeAuthorIds are admin-only
@@ -196,6 +203,7 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
               ? excludeOtherPersonalAgents
               : undefined,
             labels: parseLabelsParam(labels),
+            status,
           },
           user.id,
           isAdmin,
@@ -245,6 +253,12 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
             .describe(
               "Hide personal agents owned by other users. Admin-only; no-op for non-admins (their access control already excludes them).",
             ),
+          status: z
+            .enum(["active", "deleted"])
+            .optional()
+            .describe(
+              "Filter by lifecycle status. Deleted rows require delete permission.",
+            ),
         }),
         response: constructResponseSchema(z.array(SelectAgentSchema)),
       },
@@ -257,6 +271,7 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
           excludeBuiltIn,
           scope,
           excludeOtherPersonalAgents,
+          status,
         },
         user,
         organizationId,
@@ -273,14 +288,11 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
         organizationId,
       });
 
-      // Check read permission for the requested agent type(s)
-      if (effectiveTypes) {
-        for (const type of effectiveTypes) {
-          checker.require(type, "read");
-        }
-      } else if (!checker.hasAnyReadPermission()) {
-        throw new ApiError(403, "Forbidden");
-      }
+      const permittedTypes = getPermittedAgentTypesForList({
+        checker,
+        effectiveTypes,
+        status,
+      });
 
       // Check admin for the specific type(s) being queried, or any type if unfiltered
       const isAdmin = effectiveTypes
@@ -292,14 +304,15 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
       return reply.send(
         await AgentModel.findAll(user.id, isAdmin, {
           // agentTypes takes precedence over agentType
-          agentType: agentTypes ? undefined : agentType,
-          agentTypes,
+          agentType: agentTypes || permittedTypes ? undefined : agentType,
+          agentTypes: permittedTypes ?? agentTypes,
           excludeBuiltIn,
           scope:
             scope && scope !== "built_in" ? (scope as AgentScope) : undefined,
           excludeOtherPersonalAgents: isAdmin
             ? excludeOtherPersonalAgents
             : undefined,
+          status,
         }),
       );
     },
@@ -475,6 +488,19 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
             access: knowledgeSourceAccess,
           });
         }
+      }
+
+      // A model and its API key are a pair: persist both or neither.
+      if (
+        !isModelSelectionComplete({
+          modelId: body.modelId,
+          apiKeyId: body.llmApiKeyId,
+        })
+      ) {
+        throw new ApiError(
+          400,
+          "An agent's model and API key must be set together",
+        );
       }
 
       // Omit teams if scope is not 'team' — scope takes precedence
@@ -894,7 +920,7 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
           ...(body.llmApiKeyId !== undefined && {
             llmApiKeyId: body.llmApiKeyId,
           }),
-          ...(body.llmModel !== undefined && { llmModel: body.llmModel }),
+          ...(body.modelId !== undefined && { modelId: body.modelId }),
           ...(body.scope !== undefined && { scope: body.scope }),
           ...(body.teams !== undefined && { teams: body.teams }),
         };
@@ -905,6 +931,29 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
           ...((body.scope ?? existingAgent.scope) !== "team" &&
             body.teams !== undefined && { teams: [] }),
         };
+      }
+
+      // A model and its API key are a pair: persist both or neither. Validate
+      // the merged result, but only when this update touches either field — an
+      // unrelated edit must not be blocked by a pre-existing half pair.
+      if (body.modelId !== undefined || body.llmApiKeyId !== undefined) {
+        const mergedModelId =
+          body.modelId !== undefined ? body.modelId : existingAgent.modelId;
+        const mergedApiKeyId =
+          body.llmApiKeyId !== undefined
+            ? body.llmApiKeyId
+            : existingAgent.llmApiKeyId;
+        if (
+          !isModelSelectionComplete({
+            modelId: mergedModelId,
+            apiKeyId: mergedApiKeyId,
+          })
+        ) {
+          throw new ApiError(
+            400,
+            "An agent's model and API key must be set together",
+          );
+        }
       }
 
       const agent = await AgentModel.update(id, updateData);
@@ -997,6 +1046,70 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
     },
   );
 
+  fastify.post(
+    "/api/agents/:id/restore",
+    {
+      schema: {
+        operationId: RouteId.RestoreAgent,
+        description: "Restore a soft-deleted agent",
+        tags: ["Agents"],
+        params: z.object({
+          id: UuidIdSchema,
+        }),
+        response: constructResponseSchema(SelectAgentSchema),
+      },
+    },
+    async ({ params: { id }, user, organizationId }, reply) => {
+      const agent = await AgentModel.findDeletedByIdForOrganization(
+        id,
+        organizationId,
+      );
+      if (!agent) {
+        throw new ApiError(404, "Agent not found");
+      }
+
+      const checker = await getAgentTypePermissionChecker({
+        userId: user.id,
+        organizationId,
+      });
+      try {
+        checker.require(agent.agentType, "delete");
+      } catch {
+        throw new ApiError(404, "Agent not found");
+      }
+
+      const userTeamIds = !checker.isAdmin(agent.agentType)
+        ? await TeamModel.getUserTeamIds(user.id)
+        : [];
+      requireAgentModifyPermission({
+        checker,
+        agentType: agent.agentType,
+        agentScope: agent.scope,
+        agentAuthorId: agent.authorId,
+        agentTeamIds: agent.teams.map((t) => t.id),
+        userTeamIds,
+        userId: user.id,
+      });
+
+      const conflictMessage = await AgentModel.getRestoreConflictMessage(agent);
+      if (conflictMessage) {
+        throw new ApiError(409, conflictMessage);
+      }
+
+      const success = await AgentModel.restore(id);
+      if (!success) {
+        throw new ApiError(404, "Agent not found");
+      }
+
+      const restored = await AgentModel.findById(id, user.id, true);
+      if (!restored) {
+        throw new ApiError(404, "Agent not found");
+      }
+
+      return reply.send(restored);
+    },
+  );
+
   fastify.get(
     "/api/agents/labels/keys",
     {
@@ -1065,6 +1178,77 @@ const agentRoutes: FastifyPluginAsyncZod = async (fastify) => {
         organizationId,
       );
       return reply.send({ defaultAgentId });
+    },
+  );
+
+  fastify.get(
+    "/api/members/default-model",
+    {
+      schema: {
+        operationId: RouteId.GetMemberDefaultModel,
+        description: "Get the current user's default model and API key",
+        tags: ["Members"],
+        response: constructResponseSchema(
+          z.object({
+            modelId: z.string().uuid().nullable(),
+            chatApiKeyId: z.string().uuid().nullable(),
+          }),
+        ),
+      },
+    },
+    async ({ user, organizationId }, reply) => {
+      const selection = await MemberModel.getDefaultModelSelection(
+        user.id,
+        organizationId,
+      );
+      return reply.send(selection);
+    },
+  );
+
+  fastify.put(
+    "/api/members/default-model",
+    {
+      schema: {
+        operationId: RouteId.UpdateMemberDefaultModel,
+        description: "Set the current user's default model and API key",
+        tags: ["Members"],
+        body: z.object({
+          modelId: z.string().uuid().nullable(),
+          chatApiKeyId: z.string().uuid().nullable(),
+        }),
+        response: constructResponseSchema(
+          z.object({
+            modelId: z.string().uuid().nullable(),
+            chatApiKeyId: z.string().uuid().nullable(),
+          }),
+        ),
+      },
+    },
+    async ({ body, user, organizationId }, reply) => {
+      // The default model and its API key are a pair: persist both or neither.
+      if (
+        !isModelSelectionComplete({
+          modelId: body.modelId,
+          apiKeyId: body.chatApiKeyId,
+        })
+      ) {
+        throw new ApiError(
+          400,
+          "The default model and API key must be set together",
+        );
+      }
+
+      await MemberModel.setDefaultModelSelection({
+        userId: user.id,
+        organizationId,
+        modelId: body.modelId,
+        apiKeyId: body.chatApiKeyId,
+      });
+
+      return reply.send({
+        modelId: body.modelId,
+        chatApiKeyId: body.chatApiKeyId,
+      });
     },
   );
 };
@@ -1136,4 +1320,26 @@ function parseLabelsParam(
     }
   }
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function getPermittedAgentTypesForList(params: {
+  checker: AgentTypePermissionChecker;
+  effectiveTypes: AgentType[] | undefined;
+  status: "active" | "deleted" | undefined;
+}): AgentType[] | undefined {
+  const action = params.status === "deleted" ? "delete" : "read";
+
+  if (params.effectiveTypes) {
+    for (const type of params.effectiveTypes) {
+      params.checker.require(type, action);
+    }
+    return undefined;
+  }
+
+  const permittedTypes = params.checker.getAgentTypesWithPermission(action);
+  if (permittedTypes.length === 0) {
+    throw new ApiError(403, "Forbidden");
+  }
+
+  return permittedTypes;
 }

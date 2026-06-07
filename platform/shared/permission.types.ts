@@ -19,10 +19,14 @@ export const actions = [
   "cancel",
   "enable",
   "query",
+  "execute",
+  "deploy-to-restricted",
 ] as const;
 
 export const resources = [
   "agent",
+  "skill",
+  "sandbox",
   "mcpGateway",
   "llmProxy",
   "toolPolicy",
@@ -30,9 +34,12 @@ export const resources = [
   "identityProvider",
   "mcpRegistry",
   "mcpServerInstallation",
+  "knowledgeFile",
   "knowledgeSource",
   "knowledgeSettings",
   "mcpServerInstallationRequest",
+  "environment",
+  "githubAppConfig",
   "chat",
   "llmCost",
   "llmLimit",
@@ -67,14 +74,19 @@ export const resources = [
   "invitation",
   "team",
   "apiKey",
+  "serviceAccount",
+  "auditLog",
   "simpleView",
   "chatAgentPicker",
   "chatProviderSettings",
   "chatExpandToolCalls",
+  "siteNotification",
 ] as const;
 
 export const resourceLabels: Record<Resource, string> = {
   agent: "Agents",
+  skill: "Skills",
+  sandbox: "Code Sandbox",
   mcpGateway: "MCP Gateways",
   llmProxy: "LLM Proxies",
   toolPolicy: "Tools & Policies",
@@ -85,9 +97,12 @@ export const resourceLabels: Record<Resource, string> = {
   invitation: "Invitations",
   mcpRegistry: "MCP Registry",
   mcpServerInstallation: "MCP Server Installations",
+  knowledgeFile: "Knowledge Files",
   knowledgeSource: "Knowledge Sources",
   knowledgeSettings: "Knowledge Settings",
   mcpServerInstallationRequest: "MCP Server Installation Requests",
+  environment: "Environments",
+  githubAppConfig: "GitHub App Configurations",
   team: "Teams",
   ac: "Roles",
   chat: "Chats",
@@ -100,6 +115,8 @@ export const resourceLabels: Record<Resource, string> = {
   llmModel: "LLM Models",
   secret: "Secrets",
   apiKey: "API Keys",
+  serviceAccount: "Service Accounts",
+  auditLog: "Audit Log",
   organizationSettings: "Organization Settings",
   llmSettings: "LLM Settings",
   agentSettings: "Agent Settings",
@@ -109,10 +126,14 @@ export const resourceLabels: Record<Resource, string> = {
   chatAgentPicker: "Chat Agent Picker",
   chatProviderSettings: "Chat Provider Settings",
   chatExpandToolCalls: "Chat Expand Tool Calls",
+  siteNotification: "Site Notifications",
 };
 
 export const resourceDescriptions: Record<Resource, string> = {
   agent: "Agents with prompts and tool assignments",
+  skill: "Agent skills — reusable SKILL.md instruction bundles",
+  sandbox:
+    "Code execution sandboxes — run commands, upload/download files, run activated skills",
   mcpGateway: "Unified MCP endpoints that aggregate tools for clients",
   llmProxy: "LLM proxy endpoints with security policies and observability",
   toolPolicy: "Tools, tool invocation policies, and trusted data policies",
@@ -131,7 +152,11 @@ export const resourceDescriptions: Record<Resource, string> = {
   llmCost: "LLM usage and cost analytics",
   mcpRegistry: "MCP server registry management",
   mcpServerInstallation: "Installed MCP servers and their runtime",
+  knowledgeFile: "Uploaded files available for knowledge retrieval",
   mcpServerInstallationRequest: "Requests for new MCP server installations",
+  environment: "Deployment environments (namespace) for catalog items",
+  githubAppConfig:
+    "GitHub App credentials for authenticating skill imports and knowledge connectors",
   optimizationRule: "LLM optimization rules for routing to cheaper models",
   member: "Users and role assignments",
   ac: "Custom RBAC roles",
@@ -140,6 +165,9 @@ export const resourceDescriptions: Record<Resource, string> = {
   identityProvider: "Identity providers for authentication",
   secret: "Secrets manager configuration and connectivity",
   apiKey: "User API keys for programmatic access",
+  serviceAccount: "Service accounts and tokens for programmatic access",
+  auditLog:
+    "Organization-wide audit trail of administrative actions and auth events",
   organizationSettings:
     "Organization settings (appearance, authentication, etc)",
   knowledgeSource:
@@ -153,6 +181,7 @@ export const resourceDescriptions: Record<Resource, string> = {
   chatExpandToolCalls:
     "Controls ability to expand and view tool call details in chat",
   organization: "Organization (internal, used by authentication system)",
+  siteNotification: "Site-wide notification banners and announcements",
 };
 
 /**
@@ -166,13 +195,21 @@ export const internalResources: Resource[] = ["organization"];
  * Used in both the create/edit role dialog and the account permissions display.
  */
 export const resourceCategories: Record<string, Resource[]> = {
-  Agents: ["agent", "agentTrigger", "scheduledTask", "agentSettings"],
+  Agents: [
+    "agent",
+    "skill",
+    "sandbox",
+    "agentTrigger",
+    "scheduledTask",
+    "agentSettings",
+  ],
   MCP: [
     "mcpGateway",
     "toolPolicy",
     "mcpRegistry",
     "mcpServerInstallation",
     "mcpServerInstallationRequest",
+    "environment",
   ],
   LLM: [
     "llmProxy",
@@ -185,7 +222,7 @@ export const resourceCategories: Record<string, Resource[]> = {
     "llmSettings",
     "llmCost",
   ],
-  Knowledge: ["knowledgeSource", "knowledgeSettings"],
+  Knowledge: ["knowledgeFile", "knowledgeSource", "knowledgeSettings"],
   Other: [
     "chat",
     "log",
@@ -202,7 +239,11 @@ export const resourceCategories: Record<string, Resource[]> = {
     "identityProvider",
     "secret",
     "apiKey",
+    "serviceAccount",
+    "auditLog",
+    "githubAppConfig",
     "organizationSettings",
+    "siteNotification",
   ],
 };
 
@@ -221,9 +262,6 @@ export type AgentType = "profile" | "mcp_gateway" | "llm_proxy" | "agent";
 
 /** Database-level agent scope values */
 export type AgentScope = "personal" | "team" | "org";
-
-/** Database-level agent tool assignment mode values */
-export type AgentToolAssignmentMode = "manual" | "automatic";
 
 /**
  * Maps an agent's `agentType` to the corresponding RBAC resource.

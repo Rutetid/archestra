@@ -2,11 +2,9 @@
 
 import {
   type AgentType,
-  archestraApiSdk,
   type archestraApiTypes,
   E2eTestId,
-} from "@shared";
-import { useQuery } from "@tanstack/react-query";
+} from "@archestra/shared";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { ChevronDown, ChevronUp, Plus, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -19,6 +17,7 @@ import { AgentIcon } from "@/components/agent-icon";
 import { AgentNameCell } from "@/components/agent-name-cell";
 import {
   ActiveFilterBadges,
+  AgentDeletedStatusFilter,
   AgentScopeFilter,
 } from "@/components/agent-scope-filter";
 import {
@@ -43,12 +42,14 @@ import {
   useProfile,
   useProfiles,
   useProfilesPaginated,
+  useRestoreProfile,
 } from "@/lib/agent.query";
-import { useHasPermissions } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
 import { useDataTableQueryParams } from "@/lib/hooks/use-data-table-query-params";
+import { useTeams } from "@/lib/teams/team.query";
 import { AgentActions } from "./agent-actions";
+import { ConvertToSkillDialog } from "./convert-to-skill-dialog";
 
 type AgentsInitialData = {
   agents: archestraApiTypes.GetAgentsResponses["200"] | null;
@@ -127,6 +128,10 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
   const authorIdsFromUrl = searchParams.get("authorIds");
   const excludeAuthorIdsFromUrl = searchParams.get("excludeAuthorIds");
   const labelsFromUrl = searchParams.get("labels");
+  const statusFromUrl = searchParams.get("status") as
+    | "active"
+    | "deleted"
+    | null;
 
   // Default sorting
   const sortBy = sortByFromUrl || DEFAULT_SORT_BY;
@@ -153,18 +158,11 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
         ? true
         : undefined,
     labels: labelsFromUrl || undefined,
+    status: statusFromUrl || undefined,
   });
   const { data: canReadTeams } = useHasPermissions({ team: ["read"] });
 
-  // Keep teams cache warm for AgentDialog
-  const { data: userTeams } = useQuery({
-    queryKey: ["teams"],
-    queryFn: async () => {
-      const { data } = await archestraApiSdk.getTeams({
-        query: { limit: 100, offset: 0 },
-      });
-      return data?.data || [];
-    },
+  const { data: userTeams } = useTeams({
     initialData: initialData?.teams,
     enabled: !!canReadTeams,
   });
@@ -173,7 +171,7 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
   const { data: isAgentTeamAdmin } = useHasPermissions({
     agent: ["team-admin"],
   });
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const currentUserId = session?.user?.id;
   const userTeamIdSet = new Set((userTeams ?? []).map((t) => t.id));
 
@@ -216,6 +214,11 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
   );
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const exportAgent = useExportAgent();
+  const restoreAgent = useRestoreProfile();
+
+  const [convertingAgent, setConvertingAgent] = useState<AgentData | null>(
+    null,
+  );
 
   // Handle 'create' URL parameter to open the Create Agent dialog
   useEffect(() => {
@@ -301,7 +304,13 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
   const agents = agentsResponse?.data || [];
   const pagination = agentsResponse?.pagination;
   const showLoading = isPending && !initialData?.agents;
-  const hasActiveFilters = !!(nameFilter || scopeFromUrl || labelsFromUrl);
+  const isDeletedView = statusFromUrl === "deleted";
+  const hasActiveFilters = !!(
+    nameFilter ||
+    scopeFromUrl ||
+    labelsFromUrl ||
+    isDeletedView
+  );
 
   const clearFilters = useCallback(() => {
     updateQueryParams({
@@ -312,6 +321,7 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
       authorIds: null,
       excludeAuthorIds: null,
       labels: null,
+      status: null,
     });
   }, [updateQueryParams]);
 
@@ -463,7 +473,16 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
               setViewingAgent(agentData);
             }}
             onDelete={setDeletingAgentId}
+            onRestore={(agentId) => {
+              restoreAgent.mutate(agentId, {
+                onSuccess: (data) => {
+                  if (!data) return;
+                  toast.success("Agent restored successfully");
+                },
+              });
+            }}
             onClone={handleClone}
+            onConvertToSkill={setConvertingAgent}
             onExport={(agentData) => {
               exportAgent.mutate(agentData.id, {
                 onSuccess: (data) => {
@@ -530,6 +549,9 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
                   paramName="name"
                 />
                 <AgentScopeFilter showBuiltIn ownerLabelPlural="agents" />
+                <AgentDeletedStatusFilter
+                  deletePermission={{ agent: ["delete"] }}
+                />
               </div>
               {!canReadTeams && (
                 <PermissionRequirementHint
@@ -556,7 +578,11 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
                 onPaginationChange={handlePaginationChange}
                 emptyMessage="No agents found"
                 hasActiveFilters={hasActiveFilters}
-                filteredEmptyMessage="No agents match your filters. Try adjusting your search."
+                filteredEmptyMessage={
+                  isDeletedView
+                    ? "No deleted agents found."
+                    : "No agents match your filters. Try adjusting your search."
+                }
                 onClearFilters={clearFilters}
               />
             </div>
@@ -605,6 +631,13 @@ function Agents({ initialData }: { initialData?: AgentsInitialData }) {
               open={isImportDialogOpen}
               onOpenChange={setIsImportDialogOpen}
               onSuccess={() => {}}
+            />
+
+            <ConvertToSkillDialog
+              agent={convertingAgent}
+              onOpenChange={(open) => {
+                if (!open) setConvertingAgent(null);
+              }}
             />
           </div>
         </div>

@@ -31,7 +31,7 @@ export type PrefetchedMcpServer = {
 type AgentToolAssignmentPrefetchedData = {
   existingAgentIds: Set<string>;
   toolsMap: Map<string, Tool>;
-  catalogItemsMap: Map<string, InternalMcpCatalog>;
+  catalogItemsMap: ReadonlyMap<string, InternalMcpCatalog>;
   mcpServersBasicMap: Map<string, PrefetchedMcpServer>;
 };
 
@@ -118,6 +118,17 @@ export async function validateAssignment(
       error: {
         message: `Tool with ID ${toolId} not found`,
         type: "not_found",
+      },
+    };
+  }
+
+  if (tool.clonedPendingDiscovery) {
+    return {
+      code: "validation_error",
+      error: {
+        message:
+          "Tool is not available for assignment until its server is installed.",
+        type: "validation_error",
       },
     };
   }

@@ -1,4 +1,17 @@
 import { createHash } from "node:crypto";
+import type { IncomingMessage } from "node:http";
+import {
+  ARCHESTRA_MCP_CATALOG_ID,
+  hasArchestraTokenPrefix,
+  isAgentTool,
+  MCP_APPS_SERVER_EXTENSION_CAPABILITIES,
+  MCP_ENTERPRISE_AUTH_EXTENSION_CAPABILITIES,
+  OAUTH_TOKEN_ID_PREFIX,
+  parseFullToolName,
+  TOOL_QUERY_KNOWLEDGE_SOURCES_SHORT_NAME,
+  TOOL_RUN_TOOL_SHORT_NAME,
+  TOOL_SEARCH_TOOLS_SHORT_NAME,
+} from "@archestra/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -11,18 +24,6 @@ import {
   ReadResourceRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  ARCHESTRA_MCP_CATALOG_ID,
-  hasArchestraTokenPrefix,
-  isAgentTool,
-  MCP_APPS_SERVER_EXTENSION_CAPABILITIES,
-  MCP_ENTERPRISE_AUTH_EXTENSION_CAPABILITIES,
-  OAUTH_TOKEN_ID_PREFIX,
-  parseFullToolName,
-  TOOL_QUERY_KNOWLEDGE_SOURCES_SHORT_NAME,
-  TOOL_RUN_TOOL_SHORT_NAME,
-  TOOL_SEARCH_TOOLS_SHORT_NAME,
-} from "@shared";
 import type { FastifyRequest } from "fastify";
 import {
   archestraMcpBranding,
@@ -34,6 +35,7 @@ import { userHasPermission } from "@/auth/utils";
 import { LRUCacheManager } from "@/cache-manager";
 import mcpClient, { type TokenAuthContext } from "@/clients/mcp-client";
 import config from "@/config";
+import { evaluateSingleMcpToolInvocationPolicy } from "@/guardrails/tool-invocation";
 import logger from "@/logging";
 import {
   AgentConnectorAssignmentModel,
@@ -121,7 +123,6 @@ type ResolvedArchestraToken =
     };
 
 const TOKEN_AUTH_CACHE_TTL_MS = 30_000;
-const TOKEN_AUTH_CACHE_NULL_TTL_MS = 5_000;
 const TOKEN_AUTH_CACHE_MAX_ENTRIES = 1_000;
 const tokenAuthCache = new LRUCacheManager<TokenAuthResult | null>({
   maxSize: TOKEN_AUTH_CACHE_MAX_ENTRIES,
@@ -287,15 +288,15 @@ export async function createAgentServer(
   // SEP-1865: resources/list, resources/templates/list, prompts/list
   // Proxy to all upstream MCP servers connected to this agent and aggregate results.
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    return mcpClient.listResources(agentId);
+    return mcpClient.listResources(agentId, tokenAuth);
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    return mcpClient.listResourceTemplates(agentId);
+    return mcpClient.listResourceTemplates(agentId, tokenAuth);
   });
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    return mcpClient.listPrompts(agentId);
+    return mcpClient.listPrompts(agentId, tokenAuth);
   });
 
   server.setRequestHandler(
@@ -325,6 +326,21 @@ export async function createAgentServer(
         // Check if this is an Archestra tool or agent delegation tool
         const isArchestraTool = archestraMcpBranding.isToolName(name);
         const isAgentDelegationTool = isAgentTool(name);
+        const contextIsTrusted = !agent.considerContextUntrusted;
+
+        const policyBlock = await evaluateSingleMcpToolInvocationPolicy({
+          agentId: agent.id,
+          toolName: name,
+          toolInput: args ?? {},
+          organizationId: tokenAuth?.organizationId,
+          contextIsTrusted,
+        });
+        if (policyBlock) {
+          return {
+            content: [{ type: "text", text: policyBlock.refusalMessage }],
+            isError: true,
+          };
+        }
 
         if (isArchestraTool || isAgentDelegationTool) {
           logger.info(
@@ -356,6 +372,7 @@ export async function createAgentServer(
                 userId: tokenAuth?.userId,
                 organizationId: tokenAuth?.organizationId,
                 tokenAuth,
+                contextIsTrusted,
               });
               span.setAttribute(
                 ATTR_MCP_IS_ERROR_RESULT,
@@ -545,6 +562,33 @@ export function createStatelessTransport(
 
   logger.info({ agentId }, "Stateless transport instance created");
   return transport;
+}
+
+/**
+ * Hono's Node adapter drains unread request bodies by calling
+ * `request.socket.destroySoon()`. Fastify inject uses a socket-like test object
+ * without that legacy method, so provide the method only when the socket lacks it.
+ */
+export function ensureRequestSocketDestroySoon(request: IncomingMessage): void {
+  const socket = request.socket as
+    | (IncomingMessage["socket"] & {
+        destroySoon?: () => void;
+        end?: () => void;
+      })
+    | undefined;
+
+  if (!socket || typeof socket.destroySoon === "function") {
+    return;
+  }
+
+  socket.destroySoon = () => {
+    if (typeof socket.destroy === "function") {
+      socket.destroy();
+      return;
+    }
+
+    socket.end?.();
+  };
 }
 
 /**
@@ -1035,19 +1079,15 @@ export async function validateExternalIdpToken(
       return null;
     }
 
-    // Only OIDC providers support JWKS validation
     if (!idpProvider.oidcConfig) {
-      logger.debug(
+      logger.warn(
         { profileId, identityProviderId: agent.identityProviderId },
-        "validateExternalIdpToken: Identity provider has no OIDC config",
+        "validateExternalIdpToken: identity provider has no OIDC config",
       );
       return null;
     }
 
     const oidcConfig = idpProvider.oidcConfig;
-    if (!oidcConfig) {
-      return null;
-    }
 
     if (!oidcConfig.clientId) {
       logger.warn(
@@ -1164,11 +1204,10 @@ export async function validateExternalIdpToken(
       rawToken: tokenValue,
     };
   } catch (error) {
-    logger.debug(
-      {
-        profileId,
-        error: error instanceof Error ? error.message : String(error),
-      },
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    logger.warn(
+      { profileId, error: message, stack },
       "validateExternalIdpToken: unexpected error",
     );
     return null;
@@ -1210,22 +1249,41 @@ function cacheTokenAuthResult(
   cacheKey: string,
   result: TokenAuthResult | null,
 ): void {
-  tokenAuthCache.set(
-    cacheKey,
-    result,
-    result ? TOKEN_AUTH_CACHE_TTL_MS : TOKEN_AUTH_CACHE_NULL_TTL_MS,
-  );
+  // Negative results are intentionally NOT cached. Caching auth failures
+  // creates a "cache treadmill" where every retry refreshes the negative
+  // entry: a transient race during agent/IdP creation fails the first
+  // call, the failure is cached, the test/client retries within the cache
+  // TTL window, that retry finds (and refreshes) the cached `null`, and
+  // the cycle repeats forever (or until the polling budget is exhausted).
+  //
+  // This was the root cause of intermittent 401s in CI for the JWKS /
+  // enterprise-managed-credentials e2e suites — those tests create an
+  // identity provider + agent + IdP-binding within milliseconds of the
+  // first gateway call, and the negative cache kept the early failure
+  // sticky long after the underlying state stabilized.
+  //
+  // The defensive benefit of negative caching (less DB load on rejected
+  // tokens) is small: invalid-token requests already pay an upstream
+  // auth-rate-limit cost, and the validator's DB lookups are indexed and
+  // fast. Skipping the cache for failures lets every request re-evaluate
+  // against fresh state — eliminating the race entirely.
+  if (result === null) {
+    return;
+  }
+  tokenAuthCache.set(cacheKey, result, TOKEN_AUTH_CACHE_TTL_MS);
 }
 
 function cacheRawArchestraToken(
   rawTokenHash: string,
   result: ResolvedArchestraToken | null,
 ): void {
-  rawArchestraTokenCache.set(
-    rawTokenHash,
-    result,
-    result ? TOKEN_AUTH_CACHE_TTL_MS : TOKEN_AUTH_CACHE_NULL_TTL_MS,
-  );
+  // Same rationale as cacheTokenAuthResult: don't cache failures, to
+  // avoid the negative-cache treadmill that turns a transient creation
+  // race into a sticky 5-second window of 401s.
+  if (result === null) {
+    return;
+  }
+  rawArchestraTokenCache.set(rawTokenHash, result, TOKEN_AUTH_CACHE_TTL_MS);
 }
 
 function buildTokenHashes(profileId: string, tokenValue: string): TokenHashes {

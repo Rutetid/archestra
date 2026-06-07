@@ -1,5 +1,5 @@
+import { RouteId } from "@archestra/shared";
 import fastifyHttpProxy from "@fastify/http-proxy";
-import { RouteId } from "@shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import config from "@/config";
@@ -19,13 +19,13 @@ const anthropicProxyRoutes: FastifyPluginAsyncZod = async (fastify) => {
   await fastify.register(fastifyHttpProxy, {
     upstream: config.llm.anthropic.baseUrl,
     prefix: ANTHROPIC_PREFIX,
-    rewritePrefix: "/v1",
+    rewritePrefix: "",
     preHandler: createProxyPreHandler({
       apiPrefix: ANTHROPIC_PREFIX,
       endpointSuffix: MESSAGES_SUFFIX,
       upstream: config.llm.anthropic.baseUrl,
       providerName: "Anthropic",
-      rewritePrefix: "/v1",
+      rewritePrefix: "",
       skipErrorResponse: {
         type: "error",
         error: {

@@ -1,4 +1,7 @@
-import { ArchestraInternalErrorCode, ZhipuaiErrorTypes } from "@shared";
+import {
+  ArchestraInternalErrorCode,
+  ZhipuaiErrorTypes,
+} from "@archestra/shared";
 import { encode as toonEncode } from "@toon-format/toon";
 import { get } from "lodash-es";
 import config from "@/config";
@@ -866,7 +869,7 @@ async function convertToolResultsToToon(
               },
               "convertToolResultsToToon: compressed",
             );
-            logger.debug(
+            logger.trace(
               {
                 toolCallId: message.tool_call_id,
                 before: noncompressed,

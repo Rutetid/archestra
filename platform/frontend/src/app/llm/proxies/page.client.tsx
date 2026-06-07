@@ -1,7 +1,6 @@
 "use client";
 
-import { archestraApiSdk, type archestraApiTypes, E2eTestId } from "@shared";
-import { useQuery } from "@tanstack/react-query";
+import { type archestraApiTypes, E2eTestId } from "@archestra/shared";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -13,6 +12,7 @@ import { AgentIcon } from "@/components/agent-icon";
 import { AgentNameCell } from "@/components/agent-name-cell";
 import {
   ActiveFilterBadges,
+  AgentDeletedStatusFilter,
   AgentScopeFilter,
 } from "@/components/agent-scope-filter";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
@@ -33,11 +33,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { DEFAULT_SORT_BY, DEFAULT_SORT_DIRECTION } from "@/consts";
-import { useDeleteProfile, useProfilesPaginated } from "@/lib/agent.query";
-import { useHasPermissions } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import {
+  useDeleteProfile,
+  useProfilesPaginated,
+  useRestoreProfile,
+} from "@/lib/agent.query";
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { getFrontendDocsUrl } from "@/lib/docs/docs";
 import { useDataTableQueryParams } from "@/lib/hooks/use-data-table-query-params";
+import { useTeams } from "@/lib/teams/team.query";
 import { LlmProxyActions } from "./llm-proxy-actions";
 
 type LlmProxiesInitialData = {
@@ -114,9 +118,19 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
   const authorIdsFromUrl = searchParams.get("authorIds");
   const excludeAuthorIdsFromUrl = searchParams.get("excludeAuthorIds");
   const labelsFromUrl = searchParams.get("labels");
+  const statusFromUrl = searchParams.get("status") as
+    | "active"
+    | "deleted"
+    | null;
+  const isDeletedView = statusFromUrl === "deleted";
 
   const sortBy = sortByFromUrl || DEFAULT_SORT_BY;
   const sortDirection = sortDirectionFromUrl || DEFAULT_SORT_DIRECTION;
+  const { data: canDeleteAgents } = useHasPermissions({ agent: ["delete"] });
+  const proxyAgentTypes: Array<"llm_proxy" | "profile"> =
+    isDeletedView && !canDeleteAgents
+      ? ["llm_proxy"]
+      : ["llm_proxy", "profile"];
 
   const { data: agentsResponse, isPending } = useProfilesPaginated({
     initialData: initialData?.agents ?? undefined,
@@ -125,7 +139,7 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
     sortBy,
     sortDirection,
     name: nameFilter || undefined,
-    agentTypes: ["llm_proxy", "profile"],
+    agentTypes: proxyAgentTypes,
     scope: scopeFromUrl || undefined,
     teamIds: teamIdsFromUrl ? teamIdsFromUrl.split(",") : undefined,
     authorIds: authorIdsFromUrl ? authorIdsFromUrl.split(",") : undefined,
@@ -139,17 +153,11 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
         ? true
         : undefined,
     labels: labelsFromUrl || undefined,
+    status: statusFromUrl || undefined,
   });
   const { data: canReadTeams } = useHasPermissions({ team: ["read"] });
 
-  const { data: userTeams } = useQuery({
-    queryKey: ["teams"],
-    queryFn: async () => {
-      const { data } = await archestraApiSdk.getTeams({
-        query: { limit: 100, offset: 0 },
-      });
-      return data?.data || [];
-    },
+  const { data: userTeams } = useTeams({
     initialData: initialData?.teams,
     enabled: !!canReadTeams,
   });
@@ -158,7 +166,7 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
   const { data: isTeamAdmin } = useHasPermissions({
     llmProxy: ["team-admin"],
   });
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const currentUserId = session?.user?.id;
   const userTeamIdSet = new Set((userTeams ?? []).map((t) => t.id));
 
@@ -185,6 +193,7 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
   );
   const [editingProxy, setEditingProxy] = useState<ProxyData | null>(null);
   const [deletingProxyId, setDeletingProxyId] = useState<string | null>(null);
+  const restoreProxy = useRestoreProfile();
 
   const handleSortingChange = useCallback(
     (updater: SortingState | ((old: SortingState) => SortingState)) => {
@@ -328,6 +337,14 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
               setEditingProxy(agentData);
             }}
             onDelete={setDeletingProxyId}
+            onRestore={(agentId) => {
+              restoreProxy.mutate(agentId, {
+                onSuccess: (data) => {
+                  if (!data) return;
+                  toast.success("LLM Proxy restored successfully");
+                },
+              });
+            }}
           />
         );
       },
@@ -380,6 +397,9 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
                   paramName="name"
                 />
                 <AgentScopeFilter ownerLabelPlural="LLM proxies" />
+                <AgentDeletedStatusFilter
+                  deletePermission={{ llmProxy: ["delete"] }}
+                />
               </div>
               {!canReadTeams && (
                 <PermissionRequirementHint
@@ -410,7 +430,8 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
                     teamIdsFromUrl ||
                     authorIdsFromUrl ||
                     excludeAuthorIdsFromUrl ||
-                    labelsFromUrl,
+                    labelsFromUrl ||
+                    isDeletedView,
                 )}
                 onClearFilters={() =>
                   updateQueryParams({
@@ -420,10 +441,20 @@ function LlmProxies({ initialData }: { initialData?: LlmProxiesInitialData }) {
                     authorIds: null,
                     excludeAuthorIds: null,
                     labels: null,
+                    status: null,
                     page: "1",
                   })
                 }
-                emptyMessage="No LLM proxies found"
+                emptyMessage={
+                  isDeletedView
+                    ? "No deleted LLM proxies found"
+                    : "No LLM proxies found"
+                }
+                filteredEmptyMessage={
+                  isDeletedView
+                    ? "No deleted LLM proxies found."
+                    : "No LLM proxies match your filters. Try adjusting your search."
+                }
               />
             </div>
 

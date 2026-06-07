@@ -1,7 +1,20 @@
-import { isBuiltInCatalogId, isPlaywrightCatalogItem, RouteId } from "@shared";
+import {
+  isBuiltInCatalogId,
+  isMetadataOnlyEdit,
+  isPlaywrightCatalogItem,
+  RouteId,
+} from "@archestra/shared";
+import type { FastifyRequest } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { hasPermission } from "@/auth";
+import {
+  assertMcpCatalogTeams,
+  authorizeMcpCatalogScope,
+  getMcpCatalogPermissionChecker,
+  requireMcpCatalogModifyPermission,
+  withCatalogTeamFkErrorMapped,
+} from "@/auth/mcp-catalog-permissions";
 import config from "@/config";
 import {
   generateDeploymentYamlTemplate,
@@ -11,6 +24,7 @@ import {
 import mcpServerRuntimeManager from "@/k8s/mcp-server-runtime/manager";
 import logger from "@/logging";
 import {
+  EnvironmentModel,
   InternalMcpCatalogModel,
   McpCatalogLabelModel,
   McpServerModel,
@@ -18,8 +32,12 @@ import {
   ToolModel,
 } from "@/models";
 import { isByosEnabled, secretManager } from "@/secrets-manager";
+import { assertCanAssignEnvironment } from "@/services/environments/environment";
 import {
   autoReinstallServer,
+  localExecutionConfigChanged,
+  onlyForwardCompatibleEnvDiff,
+  reinstallMultitenantCatalog,
   requiresNewUserInputForReinstall,
 } from "@/services/mcp-reinstall";
 import {
@@ -28,6 +46,8 @@ import {
   DeleteObjectResponseSchema,
   ENTERPRISE_MANAGED_CLIENT_SECRET_OVERRIDE_SECRET_KEY,
   InsertInternalMcpCatalogSchema,
+  type InternalMcpCatalog,
+  ListInternalMcpCatalogSchema,
   PartialUpdateInternalMcpCatalogSchema,
   SelectInternalMcpCatalogSchema,
   UuidIdSchema,
@@ -49,7 +69,6 @@ const ToolWithAssignedAgentCountSchema = z.object({
     }),
   ),
 });
-
 const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
   fastify.get(
     "/api/internal_mcp_catalog",
@@ -59,7 +78,7 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         description: "Get all Internal MCP catalog items",
         tags: ["MCP Catalog"],
         response: constructResponseSchema(
-          z.array(SelectInternalMcpCatalogSchema),
+          z.array(ListInternalMcpCatalogSchema),
         ),
       },
     },
@@ -113,22 +132,55 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
       // before persistence, so work on a cloned object instead of the request body.
       const restBody = structuredClone(restBodyInput);
 
-      // Enforce scope restrictions
-      const { success: isAdmin } = await hasPermission(
-        { mcpServerInstallation: ["admin"] },
-        request.headers,
-      );
+      // Secret FK columns are server-managed: clients submit secret values, never
+      // ids. Trusting an inbound id would let a caller point the row at another
+      // org's secret (which create()'s clone-secret merge would then read/write).
+      restBody.clientSecretId = undefined;
+      restBody.localConfigSecretId = undefined;
+
+      // Enforce scope restrictions (3-tier model shared with agents/skills):
+      // org → admin only; team → mcpRegistry:team-admin + membership in the
+      // assigned teams; personal → the author.
+      const checker = await getMcpCatalogPermissionChecker({
+        userId: request.user.id,
+        organizationId: request.organizationId,
+      });
 
       restBody.scope = restBody.scope ?? "personal";
-      if (!isAdmin && restBody.scope === "org") {
-        throw new ApiError(
-          403,
-          "Only admins can create org-scoped catalog items",
-        );
-      }
+      const requestedTeamIds =
+        restBody.scope === "team" ? dedupeTeamIds(restBody.teams ?? []) : [];
+      const userTeamIds = checker.isAdmin
+        ? []
+        : await TeamModel.getUserTeamIds(request.user.id);
+      authorizeMcpCatalogScope({
+        checker,
+        scope: restBody.scope,
+        authorId: request.user.id,
+        requestedTeamIds,
+        userTeamIds,
+        userId: request.user.id,
+      });
       if (restBody.scope !== "team") {
         delete restBody.teams;
+      } else {
+        restBody.teams = requestedTeamIds;
       }
+      await assertMcpCatalogTeams({
+        scope: restBody.scope,
+        teamIds: requestedTeamIds,
+        organizationId: request.organizationId,
+      });
+
+      // Gate assigning a restricted environment. Requires
+      // environment:deploy-to-restricted (environment:admin implies it).
+      // Unrestricted and default (null) environments are open.
+      await assertCanAssignEnvironment({
+        environmentId: restBody.environmentId ?? null,
+        organizationId: request.organizationId,
+        canDeployToRestricted: await callerCanDeployToRestricted(
+          request.headers,
+        ),
+      });
 
       let clientSecretId: string | undefined;
       let localConfigSecretId: string | undefined;
@@ -168,12 +220,14 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         // Direct client_secret value
         const clientSecret = restBody.oauthConfig.client_secret;
         if (clientSecret) {
-          clientSecretId = await upsertCatalogClientSecretValue({
+          // `rotated` is irrelevant here: no installs exist yet on create.
+          const result = await upsertCatalogClientSecretValue({
             clientSecretId,
             catalogName: restBody.name,
             key: "client_secret",
             value: clientSecret,
           });
+          clientSecretId = result.id;
 
           restBody.clientSecretId = clientSecretId;
         }
@@ -183,12 +237,13 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
       const enterpriseManagedClientSecretOverride =
         restBody.enterpriseManagedConfig?.clientSecretOverride;
       if (enterpriseManagedClientSecretOverride) {
-        clientSecretId = await upsertCatalogClientSecretValue({
+        const result = await upsertCatalogClientSecretValue({
           clientSecretId,
           catalogName: restBody.name,
           key: ENTERPRISE_MANAGED_CLIENT_SECRET_OVERRIDE_SECRET_KEY,
           value: enterpriseManagedClientSecretOverride,
         });
+        clientSecretId = result.id;
 
         restBody.clientSecretId = clientSecretId;
         delete restBody.enterpriseManagedConfig?.clientSecretOverride;
@@ -281,10 +336,39 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         );
       }
 
-      const catalogItem = await InternalMcpCatalogModel.create(restBody, {
-        organizationId: request.organizationId,
-        authorId: request.user.id,
-      });
+      if (restBody.environmentId != null) {
+        const targetEnv = await EnvironmentModel.findByIdForOrganization(
+          restBody.environmentId,
+          request.organizationId,
+        );
+        if (!targetEnv) {
+          throw new ApiError(400, "Environment not found");
+        }
+      }
+      // Clone source must resolve within the caller's org — `create` copies
+      // the source's tools + guardrail policies, so an unscoped `clonedFrom`
+      // would let a caller pull another org's catalog config into their own.
+      if (restBody.clonedFrom) {
+        const cloneSource = await InternalMcpCatalogModel.findById(
+          restBody.clonedFrom,
+          {
+            expandSecrets: false,
+            userId: request.user.id,
+            isAdmin: true,
+            organizationId: request.organizationId,
+          },
+        );
+        if (!cloneSource) {
+          throw new ApiError(400, "Clone source catalog item not found");
+        }
+      }
+
+      const catalogItem = await withCatalogTeamFkErrorMapped(() =>
+        InternalMcpCatalogModel.create(restBody, {
+          organizationId: request.organizationId,
+          authorId: request.user.id,
+        }),
+      );
       return reply.send(catalogItem);
     },
   );
@@ -409,10 +493,17 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
       // before persistence, so work on a cloned object instead of the request body.
       const restBody = structuredClone(restBodyInput);
 
-      const { success: isAdmin } = await hasPermission(
-        { mcpServerInstallation: ["admin"] },
-        request.headers,
-      );
+      // Secret FK columns are server-managed (see POST): a client-supplied id
+      // would otherwise be persisted onto the row, repointing it at another
+      // org's secret. Secret handling below sets them from the existing row.
+      restBody.clientSecretId = undefined;
+      restBody.localConfigSecretId = undefined;
+
+      const checker = await getMcpCatalogPermissionChecker({
+        userId: request.user.id,
+        organizationId: request.organizationId,
+      });
+      const isAdmin = checker.isAdmin;
 
       // Get the original catalog item to check if name or serverUrl changed
       const originalCatalogItem = await InternalMcpCatalogModel.findById(id, {
@@ -425,32 +516,96 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         throw new ApiError(404, "Catalog item not found");
       }
 
-      if (!isAdmin) {
-        // Non-admins can only edit their own personal items
-        if (
-          originalCatalogItem.scope !== "personal" ||
-          originalCatalogItem.authorId !== request.user.id
-        ) {
-          throw new ApiError(
-            403,
-            "You can only edit your own personal catalog items",
-          );
-        }
-        // Non-admins cannot set scope to "org"
-        if (restBody.scope === "org") {
-          throw new ApiError(
-            403,
-            "Only admins can set catalog items to org scope",
-          );
-        }
+      // A second copy of the same row WITHOUT expanded secret values, used
+      // solely for the cascade-reinstall gate's snapshot comparison. The
+      // expanded `originalCatalogItem` above is needed by the route body
+      // downstream (env-vault construction, userConfig diffing). But the
+      // gate compares `original` vs `Model.update`'s return, and
+      // `Model.update` returns the raw row. Without this unexpanded
+      // fetch, every PUT on a bag-bearing catalog would diff on
+      // `localConfig.environment[*].value` (expanded plaintext vs stored
+      // ID-ref) and cascade-reinstall on edits that didn't actually
+      // touch any runtime field — including pure description edits.
+      const originalCatalogItemForGate = await InternalMcpCatalogModel.findById(
+        id,
+        {
+          userId: request.user.id,
+          isAdmin,
+          organizationId: request.organizationId,
+          expandSecrets: false,
+        },
+      );
+      if (!originalCatalogItemForGate) {
+        throw new ApiError(404, "Catalog item not found");
       }
 
-      if (restBody.scope && restBody.scope !== "team") {
-        delete restBody.teams;
+      const userTeamIds = checker.isAdmin
+        ? []
+        : await TeamModel.getUserTeamIds(request.user.id);
+      const existingTeamIds = originalCatalogItem.teams.map((t) => t.id);
+
+      // Gate the right to modify this item at its CURRENT scope. This both lets
+      // a team-admin member edit a team-scoped item and still blocks editing
+      // someone else's personal item.
+      requireMcpCatalogModifyPermission({
+        checker,
+        scope: originalCatalogItem.scope,
+        authorId: originalCatalogItem.authorId,
+        catalogTeamIds: existingTeamIds,
+        userTeamIds,
+        userId: request.user.id,
+      });
+
+      // Re-authorize and re-sync teams only when scope or team assignments
+      // actually change. A content-only edit that echoes the existing teams
+      // must not 403 a non-admin author/team-admin or needlessly rewrite rows.
+      const newScope = restBody.scope ?? originalCatalogItem.scope;
+      // Shared items are one-way: demoting team/org back to personal would yank
+      // the item from everyone it was shared with. Mirrors the agent route.
+      if (newScope === "personal" && originalCatalogItem.scope !== "personal") {
+        throw new ApiError(400, "Shared catalog items cannot be made personal");
       }
+      const newTeamIds =
+        newScope === "team"
+          ? dedupeTeamIds(restBody.teams ?? existingTeamIds)
+          : [];
+      const scopeChanged = newScope !== originalCatalogItem.scope;
+      const teamsChanged =
+        newScope === "team" && !sameTeamSet(newTeamIds, existingTeamIds);
+      if (scopeChanged || teamsChanged) {
+        authorizeMcpCatalogScope({
+          checker,
+          scope: newScope,
+          authorId: originalCatalogItem.authorId,
+          requestedTeamIds: newTeamIds,
+          userTeamIds,
+          userId: request.user.id,
+        });
+        await assertMcpCatalogTeams({
+          scope: newScope,
+          teamIds: newTeamIds,
+          organizationId: request.organizationId,
+        });
+      }
+
+      // Only rewrite team assignments when scope/teams actually change;
+      // undefined leaves the existing rows untouched.
+      restBody.teams = scopeChanged || teamsChanged ? newTeamIds : undefined;
 
       let clientSecretId = originalCatalogItem.clientSecretId;
       let localConfigSecretId = originalCatalogItem.localConfigSecretId;
+
+      // Catalog secret-bag value rotations are invisible to the
+      // unexpanded gate snapshot (the bag content lives outside the
+      // catalog row). Track here as we write to an EXISTING bag so the
+      // cascade can force the auto-restart path on rotation. Covers
+      // direct OAuth client_secret, enterprise-managed client-secret
+      // override, non-prompted secret env-var values, and image-pull-
+      // secret credential passwords. The Readonly-Vault flows always
+      // delete+create the bag — that swaps the `clientSecretId` /
+      // `localConfigSecretId` on the row itself, so the normal gate
+      // already detects them; no override needed there.
+      let catalogSharedSecretValuesRotated = false;
 
       // Handle OAuth client secret - either via Readonly Vault or direct value
       if (oauthClientSecretVaultPath && oauthClientSecretVaultKey) {
@@ -495,12 +650,14 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         // Direct client_secret value
         const clientSecret = restBody.oauthConfig.client_secret;
         if (clientSecret) {
-          clientSecretId = await upsertCatalogClientSecretValue({
+          const result = await upsertCatalogClientSecretValue({
             clientSecretId,
             catalogName: originalCatalogItem.name,
             key: "client_secret",
             value: clientSecret,
           });
+          clientSecretId = result.id;
+          if (result.rotated) catalogSharedSecretValuesRotated = true;
 
           restBody.clientSecretId = clientSecretId;
         }
@@ -510,12 +667,14 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
       const enterpriseManagedClientSecretOverride =
         restBody.enterpriseManagedConfig?.clientSecretOverride;
       if (enterpriseManagedClientSecretOverride) {
-        clientSecretId = await upsertCatalogClientSecretValue({
+        const result = await upsertCatalogClientSecretValue({
           clientSecretId,
           catalogName: originalCatalogItem.name,
           key: ENTERPRISE_MANAGED_CLIENT_SECRET_OVERRIDE_SECRET_KEY,
           value: enterpriseManagedClientSecretOverride,
         });
+        clientSecretId = result.id;
+        if (result.rotated) catalogSharedSecretValuesRotated = true;
 
         restBody.clientSecretId = clientSecretId;
         delete restBody.enterpriseManagedConfig?.clientSecretOverride;
@@ -584,6 +743,9 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
           if (envVar.type === "secret" && !envVar.promptOnInstallation) {
             if (envVar.value) {
               // New value provided - use it
+              if (existingSecretValues[envVar.key] !== envVar.value) {
+                catalogSharedSecretValuesRotated = true;
+              }
               secretEnvVars[envVar.key] = envVar.value;
               delete envVar.value; // Remove value from catalog template
             } else if (existingSecretValues[envVar.key]) {
@@ -603,12 +765,41 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
               const regcredKey = `__regcred_password:${entry.server}:${entry.username}`;
               if (entry.password) {
                 // New password provided - use it
+                if (existingSecretValues[regcredKey] !== entry.password) {
+                  catalogSharedSecretValuesRotated = true;
+                }
                 secretEnvVars[regcredKey] = entry.password;
                 delete entry.password; // Strip from catalog template
               } else if (existingSecretValues[regcredKey]) {
                 // No new password but key exists in existing secret - preserve it
                 secretEnvVars[regcredKey] = existingSecretValues[regcredKey];
               }
+            }
+          }
+        }
+        // A key that lived in the existing bag but is no longer
+        // referenced by either env vars or image-pull-secrets gets
+        // implicitly dropped on `updateSecret` below — that's a value
+        // change on the bag, so flag it as rotation.
+        //
+        // Gated on whether the request actually supplied either
+        // local-config surface that produces bag keys. A userConfig-
+        // only edit enters this `else if` branch (because the outer
+        // condition matches `restBody.userConfig`) without supplying
+        // a `localConfig`, leaving `secretEnvVars` empty solely
+        // because there were no env-var/imagePullSecret entries to
+        // iterate — not because keys were dropped. Without this
+        // gate, a userConfig-only edit (e.g. adding an optional
+        // header) would falsely force the auto path on a catalog
+        // with any pre-existing local secret bag.
+        const localBagSurfaceTouched =
+          restBody.localConfig?.environment !== undefined ||
+          restBody.localConfig?.imagePullSecrets !== undefined;
+        if (localBagSurfaceTouched) {
+          for (const existingKey of Object.keys(existingSecretValues)) {
+            if (!(existingKey in secretEnvVars)) {
+              catalogSharedSecretValuesRotated = true;
+              break;
             }
           }
         }
@@ -659,96 +850,244 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         );
       }
 
+      // When the environment assignment changes, gate it the same way create
+      // does — the target must belong to this org, and a restricted environment
+      // (or restricted default) requires environment:deploy-to-restricted
+      // (environment:admin implies it).
+      if (
+        "environmentId" in restBody &&
+        restBody.environmentId !== originalCatalogItem.environmentId
+      ) {
+        await assertCanAssignEnvironment({
+          environmentId: restBody.environmentId ?? null,
+          organizationId: request.organizationId,
+          canDeployToRestricted: await callerCanDeployToRestricted(
+            request.headers,
+          ),
+        });
+      }
+
+      // Detect an environment reassignment of a local catalog — it relocates
+      // the pod to a different namespace.
+      const relocatingLocalDeployment =
+        "environmentId" in restBody &&
+        restBody.environmentId !== originalCatalogItem.environmentId &&
+        originalCatalogItem.serverType === "local" &&
+        mcpServerRuntimeManager.isEnabled;
+
       // Update the catalog item
-      const catalogItem = await InternalMcpCatalogModel.update(id, restBody);
+      const catalogItem = await withCatalogTeamFkErrorMapped(() =>
+        InternalMcpCatalogModel.update(id, restBody),
+      );
 
       if (!catalogItem) {
         throw new ApiError(404, "Catalog item not found");
       }
 
-      // Handle reinstall for installed servers
-      const installedServers = await McpServerModel.findByCatalogId(id);
-
-      if (installedServers.length > 0) {
-        // Check if new user input is required for reinstall
-        if (
-          requiresNewUserInputForReinstall(originalCatalogItem, catalogItem)
-        ) {
-          // Manual reinstall required: mark servers and let user trigger reinstall
-          logger.info(
-            { catalogId: id, serverCount: installedServers.length },
-            "Catalog edit requires new user input - marking servers for manual reinstall",
-          );
-          for (const server of installedServers) {
-            await McpServerModel.update(server.id, { reinstallRequired: true });
-          }
-        } else {
-          // Auto-reinstall in background (no new user input needed)
-          logger.info(
-            { catalogId: id, serverCount: installedServers.length },
-            "Catalog edit does not require new user input - auto-reinstalling servers",
-          );
-
-          // Use setImmediate to not block the response
-          // Wrap entire callback in try/catch to prevent unhandled promise rejections
-          setImmediate(async () => {
-            try {
-              for (const server of installedServers) {
-                try {
-                  await McpServerModel.update(server.id, {
-                    localInstallationStatus: "pending",
-                    localInstallationError: null,
-                  });
-                  broadcastMcpInstallationStatus(server.id, "pending", null);
-                  await autoReinstallServer(server, catalogItem);
-                  await McpServerModel.update(server.id, {
-                    localInstallationStatus: "success",
-                    localInstallationError: null,
-                  });
-                  broadcastMcpInstallationStatus(server.id, "success", null);
-                  logger.info(
-                    { serverId: server.id, serverName: server.name },
-                    "Auto-reinstalled MCP server successfully",
-                  );
-                } catch (error) {
-                  const errorMessage =
-                    error instanceof Error ? error.message : "Unknown error";
-                  logger.error(
-                    {
-                      err: error,
-                      serverId: server.id,
-                      serverName: server.name,
-                    },
-                    "Failed to auto-reinstall MCP server - marking for manual reinstall",
-                  );
-                  // Mark for manual reinstall on failure
-                  await McpServerModel.update(server.id, {
-                    reinstallRequired: true,
-                    localInstallationStatus: "error",
-                    localInstallationError: errorMessage,
-                  });
-                  broadcastMcpInstallationStatus(
-                    server.id,
-                    "error",
-                    errorMessage,
-                  );
-                }
-              }
-            } catch (error) {
-              // Catch any unexpected errors from the iteration itself
-              logger.error(
-                { err: error, catalogId: id },
-                "Unexpected error during auto-reinstall batch - some servers may need manual reinstall",
-              );
-            }
-          });
-        }
+      // Only tear down the old-namespace deployment when it will actually be
+      // recreated. A single-tenant edit that ALSO requires new user input (e.g.
+      // a command or prompted-env-var change in the same PUT) makes the cascade
+      // mark the install reinstall-required WITHOUT recreating the pod — so
+      // tearing it down here would leave the install with no running pod until a
+      // manual reinstall. Multi-tenant always recreates via
+      // reinstallSharedDeployment below, so it's always safe there.
+      const recreatingRelocatedDeployment =
+        relocatingLocalDeployment &&
+        (originalCatalogItem.multitenant === true ||
+          !requiresNewUserInputForReinstall(
+            originalCatalogItemForGate,
+            catalogItem,
+          ));
+      if (recreatingRelocatedDeployment) {
+        // Remove the deployment(s) from the OLD namespace before recreating in
+        // the new one. The old namespace is derived from `originalCatalogItem`
+        // (captured before the update), so the teardown is correct even on a
+        // cache-cold or cache-stale replica — unlike the recreate paths below,
+        // which resolve the namespace from the now-updated row. Without this the
+        // old-namespace pod is orphaned: it keeps running in a namespace the
+        // catalog no longer points at, and the reconciler only scans the default
+        // namespace so it never reclaims it.
+        await mcpServerRuntimeManager.tearDownOldNamespaceDeployments(
+          originalCatalogItem,
+        );
       }
+
+      // Recreate in the new namespace. A multi-tenant local catalog shares one
+      // K8s Deployment across all installs, and a per-install restart no-ops on
+      // it (the sibling guard in restartServer), so it must be recreated
+      // explicitly via reinstallSharedDeployment — awaited before the cascade so
+      // its per-install tool sync runs against the relocated, ready pod rather
+      // than racing the recreate. Single-tenant installs are recreated by the
+      // cascade's per-install restart below.
+      if (
+        relocatingLocalDeployment &&
+        originalCatalogItem.multitenant === true
+      ) {
+        await mcpServerRuntimeManager.reinstallSharedDeployment(id);
+      }
+
+      // Cascade reinstall for the parent's own installs. Use the
+      // unexpanded snapshot so the gate's diff isn't fooled by
+      // expanded-vs-raw asymmetry on bag-bearing rows (see comment
+      // above on `originalCatalogItemForGate`). Force the auto-restart
+      // path when secret bag values rotated — those changes are
+      // invisible to the row-diff gate, so without the override pods
+      // would keep injecting the stale value until something else
+      // triggered a restart.
+      await cascadeReinstallForCatalog(
+        originalCatalogItemForGate,
+        catalogItem,
+        {
+          forceAutoRestart: catalogSharedSecretValuesRotated,
+        },
+      );
 
       // Note: Tools are NOT deleted - they are synced during reinstall to preserve
       // policies and profile assignments
 
       return reply.send(catalogItem);
+    },
+  );
+
+  fastify.post(
+    "/api/internal_mcp_catalog/:id/reinstall",
+    {
+      schema: {
+        operationId: RouteId.ReinstallInternalMcpCatalogItem,
+        description:
+          "Reinstall the shared K8s Deployment for a multi-tenant local catalog and cascade tool sync to every install.",
+        tags: ["MCP Catalog"],
+        params: z.object({
+          id: UuidIdSchema,
+        }),
+        response: constructResponseSchema(DeleteObjectResponseSchema),
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const checker = await getMcpCatalogPermissionChecker({
+        userId: request.user.id,
+        organizationId: request.organizationId,
+      });
+
+      const catalogItem = await InternalMcpCatalogModel.findById(id, {
+        userId: request.user.id,
+        isAdmin: checker.isAdmin,
+        organizationId: request.organizationId,
+        expandSecrets: false,
+      });
+      if (!catalogItem) {
+        throw new ApiError(404, "Catalog item not found");
+      }
+
+      // Endpoint is meaningful only for multi-tenant local catalogs — these
+      // are the only ones whose execution-config edits set
+      // `catalogReinstallRequired`. Single-tenant / remote catalogs use the
+      // per-install `mcp_server.reinstall_required` flag.
+      if (!(catalogItem.multitenant && catalogItem.serverType === "local")) {
+        throw new ApiError(
+          400,
+          "Catalog reinstall is only supported for multi-tenant local catalogs",
+        );
+      }
+
+      if (!catalogItem.catalogReinstallRequired) {
+        throw new ApiError(409, "Catalog has no pending reinstall");
+      }
+
+      // Mirror the catalog-edit ownership check: only users who could have
+      // edited the catalog (admins, the personal-scope owner, or a team-admin
+      // member of the item's teams) can trigger the reinstall.
+      requireMcpCatalogModifyPermission({
+        checker,
+        scope: catalogItem.scope,
+        authorId: catalogItem.authorId,
+        catalogTeamIds: catalogItem.teams.map((t) => t.id),
+        userTeamIds: checker.isAdmin
+          ? []
+          : await TeamModel.getUserTeamIds(request.user.id),
+        userId: request.user.id,
+      });
+
+      try {
+        await reinstallMultitenantCatalog(catalogItem);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        throw new ApiError(500, errorMessage);
+      }
+
+      return reply.send({ success: true });
+    },
+  );
+
+  fastify.post(
+    "/api/internal_mcp_catalog/:id/refresh-image",
+    {
+      schema: {
+        operationId: RouteId.RefreshInternalMcpCatalogImage,
+        description:
+          "Restart all local MCP server pods for a catalog so Kubernetes pulls the current configured image. Fan-out restarts are best effort: the request succeeds when at least one target restarts successfully, while failed installs are marked with their own error status.",
+        tags: ["MCP Catalog"],
+        params: z.object({
+          id: UuidIdSchema,
+        }),
+        response: constructResponseSchema(DeleteObjectResponseSchema),
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const checker = await getMcpCatalogPermissionChecker({
+        userId: request.user.id,
+        organizationId: request.organizationId,
+      });
+
+      const catalogItem = await InternalMcpCatalogModel.findById(id, {
+        userId: request.user.id,
+        isAdmin: checker.isAdmin,
+        organizationId: request.organizationId,
+        expandSecrets: false,
+      });
+      if (!catalogItem) {
+        throw new ApiError(404, "Catalog item not found");
+      }
+
+      requireMcpCatalogModifyPermission({
+        checker,
+        scope: catalogItem.scope,
+        authorId: catalogItem.authorId,
+        catalogTeamIds: catalogItem.teams.map((t) => t.id),
+        userTeamIds: checker.isAdmin
+          ? []
+          : await TeamModel.getUserTeamIds(request.user.id),
+        userId: request.user.id,
+      });
+
+      const targetCatalogItems = [catalogItem].filter(
+        (item) => item.serverType === "local",
+      );
+
+      if (targetCatalogItems.length === 0) {
+        throw new ApiError(
+          400,
+          "Pod restart is only supported for local catalogs",
+        );
+      }
+
+      const restartResults = await Promise.allSettled(
+        targetCatalogItems.map(refreshCatalogImage),
+      );
+      const failures = restartResults.filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (failures.length === restartResults.length) {
+        throw new ApiError(500, getSettledErrorMessage(failures[0]));
+      }
+
+      return reply.send({ success: true });
     },
   );
 
@@ -800,14 +1139,6 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
         );
       }
 
-      if (catalogItem.clientSecretId) {
-        await secretManager().deleteSecret(catalogItem.clientSecretId);
-      }
-
-      if (catalogItem.localConfigSecretId) {
-        await secretManager().deleteSecret(catalogItem.localConfigSecretId);
-      }
-
       return reply.send({
         success: await InternalMcpCatalogModel.delete(id),
       });
@@ -855,14 +1186,6 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
           403,
           "You can only delete your own personal catalog items",
         );
-      }
-
-      if (catalogItem.clientSecretId) {
-        await secretManager().deleteSecret(catalogItem.clientSecretId);
-      }
-
-      if (catalogItem.localConfigSecretId) {
-        await secretManager().deleteSecret(catalogItem.localConfigSecretId);
       }
 
       return reply.send({
@@ -1011,7 +1334,19 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
       }
 
       // Clear the custom deployment YAML
-      await InternalMcpCatalogModel.update(id, { deploymentSpecYaml: null });
+      const updated = await InternalMcpCatalogModel.update(id, {
+        deploymentSpecYaml: null,
+      });
+
+      // Cascade-reinstall installed pods so they pick up the
+      // auto-generated manifest. Without this, existing pods would keep
+      // running on the (now-cleared) override until another unrelated
+      // edit or manual reinstall triggered a restart. The standard
+      // gate handles the decision: pods come up with the new template
+      // via the auto path (no user re-prompt needed).
+      if (updated) {
+        await cascadeReinstallForCatalog(catalogItem, updated);
+      }
 
       // Extract imagePullSecrets names for YAML preview
       const imagePullSecretsForYaml = catalogItem.localConfig?.imagePullSecrets
@@ -1108,15 +1443,38 @@ const internalMcpCatalogRoutes: FastifyPluginAsyncZod = async (fastify) => {
   );
 };
 
+/**
+ * Whether the caller may deploy catalog items to restricted environments.
+ * Holding `environment:admin` (full environment management) implies the
+ * `environment:deploy-to-restricted` capability.
+ */
+async function callerCanDeployToRestricted(
+  headers: FastifyRequest["headers"],
+): Promise<boolean> {
+  const [{ success: hasAdmin }, { success: hasDeploy }] = await Promise.all([
+    hasPermission({ environment: ["admin"] }, headers),
+    hasPermission({ environment: ["deploy-to-restricted"] }, headers),
+  ]);
+  return hasAdmin || hasDeploy;
+}
+
 async function upsertCatalogClientSecretValue(params: {
   clientSecretId: string | null | undefined;
   catalogName: string;
   key: string;
   value: string;
-}): Promise<string> {
+}): Promise<{ id: string; rotated: boolean }> {
   const existingSecretValues = await getCatalogClientSecretValues(
     params.clientSecretId,
   );
+  // `rotated` distinguishes "value actually changed on an existing bag"
+  // from "writing the same value back". The cascade gate uses this to
+  // decide whether to force a pod restart (the bag content lives
+  // outside the catalog row, so a same-id-different-content write is
+  // invisible to the row-diff gate). For new bags the caller's row
+  // diff covers the cascade via the new `clientSecretId`, so `rotated`
+  // is irrelevant there.
+  const rotated = existingSecretValues[params.key] !== params.value;
   const secretValue = {
     ...existingSecretValues,
     [params.key]: params.value,
@@ -1124,14 +1482,14 @@ async function upsertCatalogClientSecretValue(params: {
 
   if (params.clientSecretId) {
     await secretManager().updateSecret(params.clientSecretId, secretValue);
-    return params.clientSecretId;
+    return { id: params.clientSecretId, rotated };
   }
 
   const secret = await secretManager().createSecret(
     secretValue,
     `${params.catalogName}-client-secrets`,
   );
-  return secret.id;
+  return { id: secret.id, rotated };
 }
 
 async function getCatalogClientSecretValues(
@@ -1151,6 +1509,263 @@ async function getCatalogClientSecretValues(
       key,
       String(value),
     ]),
+  );
+}
+
+function dedupeTeamIds(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+/** Whether two team-id lists contain the same set of ids. */
+function sameTeamSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((id) => setB.has(id));
+}
+
+async function cascadeReinstallForCatalog(
+  originalCatalogItem: InternalMcpCatalog,
+  catalogItem: InternalMcpCatalog,
+  /**
+   * Force the auto-restart path past the "no restart needed" gates
+   * (metadata-only, forward-compat) — used when the caller has
+   * out-of-band knowledge that pods need to restart even though the
+   * row looks unchanged (primarily catalog secret-bag value rotation:
+   * non-prompted secret env vars, OAuth client_secret, image-pull-
+   * secret passwords). The bag content lives outside the catalog row,
+   * so the unexpanded gate snapshot cannot see a value change.
+   *
+   * Does NOT override `requiresNewUserInputForReinstall`. If the same
+   * PUT both rotates a secret AND adds a re-prompt-requiring change
+   * (e.g. a new required prompted env var), the cascade must still
+   * mark servers for manual reinstall — auto-restarting would bring
+   * pods back without the newly-required input. The two signals are
+   * orthogonal: rotation says "pods need to restart for the value to
+   * propagate"; re-prompt says "no restart can succeed until the user
+   * supplies a value the install doesn't have."
+   */
+  override?: { forceAutoRestart?: boolean },
+): Promise<void> {
+  const installedServers = await McpServerModel.findByCatalogId(catalogItem.id);
+  if (installedServers.length === 0) return;
+
+  // Multi-tenant local catalogs have one shared K8s Deployment across all
+  // installs. Execution-config drift (image, command, args, transport) on
+  // this kind of catalog is a catalog-level event — one rollout serves
+  // every tenant — so we flag it on the catalog row instead of marking
+  // each install reinstall-required. An admin/owner clears the flag via
+  // POST /api/internal-mcp-catalog/:id/reinstall, which does the actual
+  // pod recreate + tool cascade. Single-tenant catalogs continue to use
+  // the per-install flag (see `requiresNewUserInputForReinstall`).
+  const catalogScopeChangeOnMultitenant =
+    catalogItem.multitenant === true &&
+    catalogItem.serverType === "local" &&
+    (localExecutionConfigChanged(originalCatalogItem, catalogItem) ||
+      multitenantSharedEnvChanged(originalCatalogItem, catalogItem));
+
+  if (catalogScopeChangeOnMultitenant) {
+    logger.info(
+      { catalogId: catalogItem.id, serverCount: installedServers.length },
+      "Catalog execution config changed on multi-tenant local catalog - setting catalogReinstallRequired",
+    );
+    await InternalMcpCatalogModel.update(catalogItem.id, {
+      catalogReinstallRequired: true,
+    });
+    // Fall through to also evaluate per-install marking: a prompt-input
+    // change could have landed in the same edit and still needs per-tenant
+    // input on top of the catalog-level rollout.
+  }
+
+  // Manual path is authoritative: a re-prompt edit blocks both the
+  // gate-decided auto path AND the forced auto path. Run it before any
+  // override branching.
+  if (requiresNewUserInputForReinstall(originalCatalogItem, catalogItem)) {
+    logger.info(
+      { catalogId: catalogItem.id, serverCount: installedServers.length },
+      "Catalog edit requires new user input - marking servers for manual reinstall",
+    );
+    for (const server of installedServers) {
+      await McpServerModel.update(server.id, { reinstallRequired: true });
+    }
+    return;
+  }
+
+  // If we set the catalog-level flag and nothing else needs handling per
+  // install, skip the auto-cascade. The pod is still running the old
+  // spec; the catalog-reinstall endpoint will recreate it and cascade
+  // tool sync to every install in one shot. Without this short-circuit,
+  // every install would auto-cascade against the unchanged pod, flipping
+  // statuses to "success" while the catalog flag still says "reinstall
+  // required" — a confusing mixed signal.
+  if (catalogScopeChangeOnMultitenant) {
+    logger.info(
+      { catalogId: catalogItem.id },
+      "Catalog reinstall pending - skipping auto-cascade; admin clicks 'Reinstall catalog' to apply",
+    );
+    return;
+  }
+
+  if (override?.forceAutoRestart) {
+    logger.info(
+      { catalogId: catalogItem.id, serverCount: installedServers.length },
+      "Forced auto-restart cascade (caller signaled secret-bag value rotation)",
+    );
+  } else {
+    // Skip the cascade when only metadata fields changed. List in
+    // `shared/catalog-runtime-fields.ts`.
+    //
+    // Tradeoff: `originalCatalogItem` is fetched with `expandSecrets: true`
+    // (the route body needs expanded secrets downstream); `Model.update`
+    // returns the unexpanded row. For catalogs carrying any secret bag
+    // pointer, the expanded vs unexpanded shapes differ even with no real
+    // edit, so the predicate returns false and we cascade. That is the
+    // safe direction (pre-fix baseline) and `hasSecretBag` in
+    // `edit-catalog-dialog.tsx` mirrors it on the UI side. The
+    // optimization applies cleanly to non-bag catalogs.
+    if (isMetadataOnlyEdit(originalCatalogItem, catalogItem)) {
+      logger.info(
+        { catalogId: catalogItem.id, serverCount: installedServers.length },
+        "Catalog edit is metadata-only - skipping reinstall",
+      );
+      return;
+    }
+
+    // Refinement gate: `isMetadataOnlyEdit` is too blunt for env-var
+    // schema evolution. Adding an optional prompted env var, demoting
+    // required → optional, etc. legitimately changes `localConfig.environment`
+    // but doesn't invalidate any install (the existing pod's env-var
+    // bindings are still valid). Without this check, a forward-compatible
+    // edit would fall through to the auto-cascade path and silently restart
+    // every pod. Mirrors the frontend's `envChangeRequiresReinstall` so
+    // bar silence and backend behavior agree.
+    if (onlyForwardCompatibleEnvDiff(originalCatalogItem, catalogItem)) {
+      logger.info(
+        { catalogId: catalogItem.id, serverCount: installedServers.length },
+        "Catalog edit is a forward-compatible env-var change - skipping reinstall",
+      );
+      return;
+    }
+
+    logger.info(
+      { catalogId: catalogItem.id, serverCount: installedServers.length },
+      "Catalog edit does not require new user input - auto-reinstalling servers",
+    );
+  }
+
+  setImmediate(async () => {
+    try {
+      for (const server of installedServers) {
+        try {
+          await McpServerModel.update(server.id, {
+            localInstallationStatus: "pending",
+            localInstallationError: null,
+          });
+          broadcastMcpInstallationStatus(server.id, "pending", null);
+          await autoReinstallServer(server, catalogItem);
+          await McpServerModel.update(server.id, {
+            localInstallationStatus: "success",
+            localInstallationError: null,
+          });
+          broadcastMcpInstallationStatus(server.id, "success", null);
+          logger.info(
+            { serverId: server.id, serverName: server.name },
+            "Auto-reinstalled MCP server successfully",
+          );
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : "Unknown error";
+          logger.error(
+            { err: error, serverId: server.id, serverName: server.name },
+            "Failed to auto-reinstall MCP server - marking for manual reinstall",
+          );
+          await McpServerModel.update(server.id, {
+            reinstallRequired: true,
+            localInstallationStatus: "error",
+            localInstallationError: errorMessage,
+          });
+          broadcastMcpInstallationStatus(server.id, "error", errorMessage);
+        }
+      }
+    } catch (error) {
+      logger.error(
+        { err: error, catalogId: catalogItem.id },
+        "Unexpected error during auto-reinstall batch - some servers may need manual reinstall",
+      );
+    }
+  });
+}
+
+async function refreshCatalogImage(catalogItem: InternalMcpCatalog) {
+  if (catalogItem.multitenant === true) {
+    await reinstallMultitenantCatalog(catalogItem);
+    return;
+  }
+
+  const installs = await McpServerModel.findByCatalogId(catalogItem.id);
+  const restartResults = await Promise.allSettled(
+    installs.map(async (server) => {
+      await McpServerModel.update(server.id, {
+        localInstallationStatus: "pending",
+        localInstallationError: null,
+      });
+      broadcastMcpInstallationStatus(server.id, "pending", null);
+
+      try {
+        await autoReinstallServer(server, catalogItem);
+        await McpServerModel.update(server.id, {
+          localInstallationStatus: "success",
+          localInstallationError: null,
+        });
+        broadcastMcpInstallationStatus(server.id, "success", null);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        logger.error(
+          { err: error, serverId: server.id, catalogId: catalogItem.id },
+          "Pod restart failed for MCP server install",
+        );
+        await McpServerModel.update(server.id, {
+          localInstallationStatus: "error",
+          localInstallationError: errorMessage,
+        });
+        broadcastMcpInstallationStatus(server.id, "error", errorMessage);
+        throw error;
+      }
+    }),
+  );
+  const failures = restartResults.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0 && failures.length === restartResults.length) {
+    throw new Error(getSettledErrorMessage(failures[0]));
+  }
+}
+
+function getSettledErrorMessage(result: PromiseRejectedResult): string {
+  return result.reason instanceof Error
+    ? result.reason.message
+    : "Unknown error";
+}
+
+/**
+ * Non-prompted env entries land directly in the shared K8s pod's env on a
+ * multi-tenant local catalog, so any change to one of them requires a pod
+ * recreate. Prompted entries are per-install secrets surfaced at request
+ * time — they don't live on the shared pod and are tracked separately by
+ * `promptedEnvVarsChanged`, so we exclude them here. Compared fields are
+ * `key + type + value` only;
+ * `description`, `required`, and other metadata don't reach the pod env.
+ */
+function multitenantSharedEnvChanged(
+  oldCatalog: InternalMcpCatalog,
+  newCatalog: InternalMcpCatalog,
+): boolean {
+  const project = (cat: InternalMcpCatalog) =>
+    (cat.localConfig?.environment ?? [])
+      .filter((e) => !e.promptOnInstallation)
+      .map((e) => ({ key: e.key, type: e.type, value: e.value }));
+  return (
+    JSON.stringify(project(oldCatalog)) !== JSON.stringify(project(newCatalog))
   );
 }
 

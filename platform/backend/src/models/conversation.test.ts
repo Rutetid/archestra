@@ -1,9 +1,10 @@
-import { ChatErrorCode } from "@shared";
+import { ChatErrorCode } from "@archestra/shared";
 import { describe, expect, test } from "@/test";
 import ConversationModel from "./conversation";
 import ConversationChatErrorModel from "./conversation-chat-error";
 import ConversationShareModel from "./conversation-share";
 import MessageModel from "./message";
+import ModelModel from "./model";
 
 describe("ConversationModel", () => {
   test("can create a conversation", async ({
@@ -20,13 +21,11 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Test Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     expect(conversation).toBeDefined();
     expect(conversation.id).toBeDefined();
     expect(conversation.title).toBe("Test Conversation");
-    expect(conversation.selectedModel).toBe("claude-3-haiku-20240307");
     expect(conversation.userId).toBe(user.id);
     expect(conversation.organizationId).toBe(org.id);
     expect(conversation.agentId).toBe(agent.id);
@@ -52,7 +51,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Error Events",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationChatErrorModel.create({
@@ -110,7 +108,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Find Test",
-      selectedModel: "claude-3-opus-20240229",
     });
 
     const found = await ConversationModel.findById({
@@ -122,7 +119,6 @@ describe("ConversationModel", () => {
     expect(found).toBeDefined();
     expect(found?.id).toBe(created.id);
     expect(found?.title).toBe("Find Test");
-    expect(found?.selectedModel).toBe("claude-3-opus-20240229");
     expect(found?.agent?.id).toBe(agent.id);
     expect(found?.agent?.name).toBe("Find Test Agent");
     expect(Array.isArray(found?.messages)).toBe(true);
@@ -142,7 +138,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "First Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationModel.create({
@@ -150,7 +145,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Second Conversation",
-      selectedModel: "claude-3-opus-20240229",
     });
 
     const conversations = await ConversationModel.findAll(user.id, org.id);
@@ -178,7 +172,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Original Title",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const updated = await ConversationModel.update(
@@ -187,13 +180,11 @@ describe("ConversationModel", () => {
       org.id,
       {
         title: "Updated Title",
-        selectedModel: "claude-3-opus-20240229",
       },
     );
 
     expect(updated).toBeDefined();
     expect(updated?.title).toBe("Updated Title");
-    expect(updated?.selectedModel).toBe("claude-3-opus-20240229");
     expect(updated?.id).toBe(created.id);
     expect(updated?.agent?.id).toBe(agent.id);
     expect(Array.isArray(updated?.messages)).toBe(true);
@@ -213,7 +204,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "To Be Deleted",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationModel.delete(created.id, user.id, org.id);
@@ -241,7 +231,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "First",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Small delay to ensure different updatedAt times
@@ -252,7 +241,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Second",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const conversations = await ConversationModel.findAll(user.id, org.id);
@@ -265,7 +253,7 @@ describe("ConversationModel", () => {
     );
   });
 
-  test("updated conversation moves to top of list", async ({
+  test("updating a conversation title does not change list order", async ({
     makeUser,
     makeOrganization,
     makeAgent,
@@ -280,7 +268,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "First",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -291,7 +278,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Second",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Verify second is on top initially
@@ -301,16 +287,19 @@ describe("ConversationModel", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Update the first conversation - should move it to the top
+    // Update the first conversation - order should stay the same,
+    // only new message exhange changes the order
     await ConversationModel.update(first.id, user.id, org.id, {
       title: "First Updated",
     });
 
-    // Verify first is now on top after being updated
+    // Order is unchanged; only the title was updated.
     conversations = await ConversationModel.findAll(user.id, org.id);
-    expect(conversations[0].id).toBe(first.id);
-    expect(conversations[0].title).toBe("First Updated");
-    expect(conversations[1].id).toBe(second.id);
+    expect(conversations[0].id).toBe(second.id);
+    expect(conversations[1].id).toBe(first.id);
+    expect(conversations.find((c) => c.id === first.id)?.title).toBe(
+      "First Updated",
+    );
   });
 
   test("adding a message moves conversation to top of list", async ({
@@ -328,7 +317,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "First",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -339,7 +327,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Second",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Verify second is on top initially
@@ -397,7 +384,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Owned Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const found = await ConversationModel.findAccessibleById({
@@ -429,7 +415,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Shared Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await MessageModel.create({
@@ -484,7 +469,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Private Shared Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationShareModel.upsert({
@@ -525,7 +509,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Org Scoped Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationShareModel.upsert({
@@ -580,7 +563,6 @@ describe("ConversationModel", () => {
       organizationId: org1.id,
       agentId: agent.id,
       title: "User1 Org1",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Create conversation for user2 in org2
@@ -589,7 +571,6 @@ describe("ConversationModel", () => {
       organizationId: org2.id,
       agentId: agent.id,
       title: "User2 Org2",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // User1 should only see their conversation in org1
@@ -630,7 +611,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "New Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     expect(conversation.messages).toBeDefined();
@@ -652,7 +632,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "No Messages",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const found = await ConversationModel.findById({
@@ -680,7 +659,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "No Messages 1",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationModel.create({
@@ -688,7 +666,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "No Messages 2",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const conversations = await ConversationModel.findAll(user.id, org.id);
@@ -715,7 +692,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "ID Merge Test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -741,6 +717,86 @@ describe("ConversationModel", () => {
     expect(found?.messages[0].id).not.toBe("temp-ai-sdk-id");
   });
 
+  test("findById filters already-persisted empty assistant rows", async ({
+    makeUser,
+    makeOrganization,
+    makeAgent,
+  }) => {
+    const user = await makeUser();
+    const org = await makeOrganization();
+    const agent = await makeAgent({ name: "Empty Bubble Agent", teams: [] });
+
+    const conversation = await ConversationModel.create({
+      userId: user.id,
+      organizationId: org.id,
+      agentId: agent.id,
+      title: "Empty Bubble Test",
+    });
+
+    // a healthy turn: user prompt + assistant answer.
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "user",
+      content: { role: "user", parts: [{ type: "text", text: "hello" }] },
+    });
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: { role: "assistant", parts: [{ type: "text", text: "hi" }] },
+    });
+
+    // historical bad assistant rows that must not render after refresh.
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: { role: "assistant", parts: [] },
+    });
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: { role: "assistant" },
+    });
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: "",
+    });
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: {
+        role: "assistant",
+        parts: [
+          { type: "step-start" },
+          { type: "data-token-usage", data: { totalTokens: 5 } },
+        ],
+      },
+    });
+    await MessageModel.create({
+      conversationId: conversation.id,
+      role: "assistant",
+      content: {
+        role: "assistant",
+        parts: [
+          {
+            type: "data-tool-ui-start",
+            data: { toolCallId: "call_orphan", toolName: "render_chart" },
+          },
+        ],
+      },
+    });
+
+    const found = await ConversationModel.findById({
+      id: conversation.id,
+      userId: user.id,
+      organizationId: org.id,
+    });
+
+    expect(found?.messages).toHaveLength(2);
+    expect(found?.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(found?.messages[1].parts).toEqual([{ type: "text", text: "hi" }]);
+  });
+
   test("findById merges database UUIDs into multiple messages", async ({
     makeUser,
     makeOrganization,
@@ -755,7 +811,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "ID Merge All Test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -808,7 +863,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Message Order Test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -873,7 +927,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Conversation 1",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const conversation2 = await ConversationModel.create({
@@ -881,7 +934,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Conversation 2",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -964,13 +1016,9 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Provider Test Conversation",
-      selectedModel: "gpt-4o",
-      selectedProvider: "openai",
     });
 
     expect(conversation).toBeDefined();
-    expect(conversation.selectedModel).toBe("gpt-4o");
-    expect(conversation.selectedProvider).toBe("openai");
   });
 
   test("selectedProvider is null when not provided", async ({
@@ -990,14 +1038,12 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "No Provider Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     expect(conversation).toBeDefined();
-    expect(conversation.selectedProvider).toBeNull();
   });
 
-  test("can update conversation selectedProvider", async ({
+  test("can update conversation model", async ({
     makeUser,
     makeOrganization,
     makeAgent,
@@ -1005,17 +1051,23 @@ describe("ConversationModel", () => {
     const user = await makeUser();
     const org = await makeOrganization();
     const agent = await makeAgent({
-      name: "Update Provider Agent",
+      name: "Update Model Agent",
       teams: [],
+    });
+
+    const model = await ModelModel.create({
+      externalId: "anthropic/claude-3-5-sonnet",
+      provider: "anthropic",
+      modelId: "claude-3-5-sonnet",
+      inputModalities: null,
+      outputModalities: null,
     });
 
     const created = await ConversationModel.create({
       userId: user.id,
       organizationId: org.id,
       agentId: agent.id,
-      title: "Update Provider Test",
-      selectedModel: "claude-3-haiku-20240307",
-      selectedProvider: "anthropic",
+      title: "Update Model Test",
     });
 
     const updated = await ConversationModel.update(
@@ -1023,14 +1075,12 @@ describe("ConversationModel", () => {
       user.id,
       org.id,
       {
-        selectedModel: "gemini-2.5-pro",
-        selectedProvider: "gemini",
+        modelId: model.id,
       },
     );
 
     expect(updated).toBeDefined();
-    expect(updated?.selectedModel).toBe("gemini-2.5-pro");
-    expect(updated?.selectedProvider).toBe("gemini");
+    expect(updated?.modelId).toBe(model.id);
   });
 
   test("findById returns conversation with selectedProvider", async ({
@@ -1050,8 +1100,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Find Provider Test",
-      selectedModel: "gpt-4o",
-      selectedProvider: "openai",
     });
 
     const found = await ConversationModel.findById({
@@ -1061,8 +1109,6 @@ describe("ConversationModel", () => {
     });
 
     expect(found).toBeDefined();
-    expect(found?.selectedModel).toBe("gpt-4o");
-    expect(found?.selectedProvider).toBe("openai");
   });
 
   test("findAll returns conversations with selectedProvider", async ({
@@ -1082,8 +1128,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Anthropic Conversation",
-      selectedModel: "claude-3-haiku-20240307",
-      selectedProvider: "anthropic",
     });
 
     await ConversationModel.create({
@@ -1091,22 +1135,11 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "OpenAI Conversation",
-      selectedModel: "gpt-4o",
-      selectedProvider: "openai",
     });
 
     const conversations = await ConversationModel.findAll(user.id, org.id);
 
     expect(conversations).toHaveLength(2);
-    const anthropicConv = conversations.find(
-      (c) => c.title === "Anthropic Conversation",
-    );
-    const openaiConv = conversations.find(
-      (c) => c.title === "OpenAI Conversation",
-    );
-
-    expect(anthropicConv?.selectedProvider).toBe("anthropic");
-    expect(openaiConv?.selectedProvider).toBe("openai");
   });
 
   test("findAll with search query filters by conversation title", async ({
@@ -1123,7 +1156,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Python Tutorial",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationModel.create({
@@ -1131,7 +1163,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "JavaScript Guide",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const results = await ConversationModel.findAll(user.id, org.id, "Python");
@@ -1154,7 +1185,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Conversation 1",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const conv2 = await ConversationModel.create({
@@ -1162,7 +1192,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Conversation 2",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -1210,7 +1239,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Test Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -1250,7 +1278,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Test Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -1289,7 +1316,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Python Tutorial",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const resultsLower = await ConversationModel.findAll(
@@ -1332,7 +1358,6 @@ describe("ConversationModel", () => {
       organizationId: org1.id,
       agentId: agent.id,
       title: "Python Tutorial",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationModel.create({
@@ -1340,7 +1365,6 @@ describe("ConversationModel", () => {
       organizationId: org2.id,
       agentId: agent.id,
       title: "Python Guide",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const user1Results = await ConversationModel.findAll(
@@ -1377,7 +1401,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Conversation 1",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await ConversationModel.create({
@@ -1385,7 +1408,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Conversation 2",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const emptyResults = await ConversationModel.findAll(user.id, org.id, "");
@@ -1417,7 +1439,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "JavaScript Tutorial",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const results = await ConversationModel.findAll(user.id, org.id, "Script");
@@ -1443,7 +1464,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -1481,7 +1501,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "100% Complete",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Create conversation without % in title
@@ -1490,7 +1509,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Other Conversation",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Search for % should only match the conversation with % in title
@@ -1519,7 +1537,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "file_name",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Create conversation with similar pattern but no underscore
@@ -1528,7 +1545,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "filename",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Search for _ should only match the conversation with _ in title
@@ -1557,7 +1573,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "C:\\Users\\test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Create conversation without backslash
@@ -1566,7 +1581,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "C Users test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Search for backslash should only match the conversation with backslash
@@ -1593,7 +1607,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Many Messages",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const MessageModel = (await import("./message")).default;
@@ -1636,7 +1649,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Pin Test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     expect(created.pinnedAt).toBeNull();
@@ -1668,7 +1680,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Unpin Test",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     // Pin it first
@@ -1710,7 +1721,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Python First",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1720,7 +1730,6 @@ describe("ConversationModel", () => {
       organizationId: org.id,
       agentId: agent.id,
       title: "Python Second",
-      selectedModel: "claude-3-haiku-20240307",
     });
 
     const results = await ConversationModel.findAll(user.id, org.id, "Python");
@@ -1751,7 +1760,6 @@ describe("ConversationModel", () => {
         organizationId: org.id,
         agentId: agent.id,
         title: "Conversation to preserve",
-        selectedModel: "claude-3-haiku-20240307",
       });
 
       // Verify conversation has agent before deletion
@@ -1798,7 +1806,6 @@ describe("ConversationModel", () => {
         organizationId: org.id,
         agentId: agentToDelete.id,
         title: "Conversation with deleted agent",
-        selectedModel: "claude-3-haiku-20240307",
       });
 
       await ConversationModel.create({
@@ -1806,7 +1813,6 @@ describe("ConversationModel", () => {
         organizationId: org.id,
         agentId: agentToKeep.id,
         title: "Conversation with existing agent",
-        selectedModel: "claude-3-haiku-20240307",
       });
 
       // Delete one agent
@@ -1851,7 +1857,6 @@ describe("ConversationModel", () => {
         organizationId: org.id,
         agentId: agent.id,
         title: "Original Title",
-        selectedModel: "claude-3-haiku-20240307",
       });
 
       // Delete the agent
@@ -1888,7 +1893,6 @@ describe("ConversationModel", () => {
         organizationId: org.id,
         agentId: agent.id,
         title: "Conversation to delete",
-        selectedModel: "claude-3-haiku-20240307",
       });
 
       // Delete the agent

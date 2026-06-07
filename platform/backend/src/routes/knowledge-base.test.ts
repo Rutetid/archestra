@@ -1,11 +1,14 @@
+import { ADMIN_ROLE_NAME } from "@archestra/shared";
 import config from "@/config";
 import { knowledgeSourceAccessControlService } from "@/knowledge-base";
 import {
+  GithubAppConfigModel,
   KbChunkModel,
   KbDocumentModel,
   KnowledgeBaseConnectorModel,
   KnowledgeBaseModel,
 } from "@/models";
+import { secretManager } from "@/secrets-manager";
 import type { FastifyInstanceWithZod } from "@/server";
 import { createFastifyInstance } from "@/server";
 import { afterEach, beforeEach, describe, expect, test, vi } from "@/test";
@@ -134,6 +137,247 @@ describe("knowledge base routes", () => {
       });
 
       expect(response.statusCode).toBe(404);
+    });
+  });
+
+  describe("GET /api/connectors/:id/documents", () => {
+    test("lists documents for a connector with pagination metadata", async () => {
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Connector Docs",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://connector-docs.atlassian.net",
+          isCloud: true,
+          projectKey: "CD",
+        },
+      });
+      const otherConnector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Other Connector",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://other-connector.atlassian.net",
+          isCloud: true,
+          projectKey: "OC",
+        },
+      });
+
+      await KbDocumentModel.create({
+        organizationId,
+        sourceId: "connector-doc-1",
+        connectorId: connector.id,
+        title: "Connector Alpha",
+        content: "alpha",
+        contentHash: "hash-connector-alpha",
+        acl: ["org:*"],
+      });
+      await KbDocumentModel.create({
+        organizationId,
+        sourceId: "connector-doc-2",
+        connectorId: connector.id,
+        title: "Connector Beta",
+        content: "beta",
+        contentHash: "hash-connector-beta",
+        acl: ["org:*"],
+      });
+      await KbDocumentModel.create({
+        organizationId,
+        sourceId: "other-connector-doc",
+        connectorId: otherConnector.id,
+        title: "Other Connector Doc",
+        content: "other",
+        contentHash: "hash-other-connector",
+        acl: ["org:*"],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/connectors/${connector.id}/documents?limit=1&offset=0`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        data: Array<{ connectorId: string; connectorType: string }>;
+        pagination: { total: number; hasNext: boolean };
+      };
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]).toMatchObject({
+        connectorId: connector.id,
+        connectorType: "jira",
+      });
+      expect(body.data[0]).not.toHaveProperty("content");
+      expect(body.pagination.total).toBe(2);
+      expect(body.pagination.hasNext).toBe(true);
+    });
+
+    test("filters connector documents by title search", async () => {
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Search Connector Docs",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://connector-search.atlassian.net",
+          isCloud: true,
+          projectKey: "CS",
+        },
+      });
+
+      await KbDocumentModel.create({
+        organizationId,
+        sourceId: "connector-search-1",
+        connectorId: connector.id,
+        title: "Roadmap Planning",
+        content: "roadmap",
+        contentHash: "hash-roadmap",
+        acl: ["org:*"],
+      });
+      await KbDocumentModel.create({
+        organizationId,
+        sourceId: "connector-search-2",
+        connectorId: connector.id,
+        title: "Release Notes",
+        content: "release",
+        contentHash: "hash-connector-release",
+        acl: ["org:*"],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/connectors/${connector.id}/documents?limit=20&offset=0&search=roadmap`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        data: Array<{ title: string }>;
+        pagination: { total: number };
+      };
+      expect(body.pagination.total).toBe(1);
+      expect(body.data.map((doc) => doc.title)).toEqual(["Roadmap Planning"]);
+    });
+  });
+
+  describe("GET /api/connectors/:id/documents/:docId", () => {
+    test("gets a single connector document including content", async () => {
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Connector Doc Detail",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://connector-detail.atlassian.net",
+          isCloud: true,
+          projectKey: "CDD",
+        },
+      });
+      const document = await KbDocumentModel.create({
+        organizationId,
+        sourceId: "connector-detail-doc",
+        connectorId: connector.id,
+        title: "Connector Detail",
+        content: "connector detail content",
+        contentHash: "hash-connector-detail",
+        acl: ["org:*"],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/connectors/${connector.id}/documents/${document.id}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        id: document.id,
+        content: "connector detail content",
+        connectorType: "jira",
+      });
+    });
+
+    test("returns 404 when document belongs to another connector", async () => {
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Connector Detail A",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://connector-detail-a.atlassian.net",
+          isCloud: true,
+          projectKey: "CDA",
+        },
+      });
+      const otherConnector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Connector Detail B",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://connector-detail-b.atlassian.net",
+          isCloud: true,
+          projectKey: "CDB",
+        },
+      });
+      const otherDocument = await KbDocumentModel.create({
+        organizationId,
+        sourceId: "other-detail-doc",
+        connectorId: otherConnector.id,
+        title: "Other Detail",
+        content: "other detail content",
+        contentHash: "hash-other-detail",
+        acl: ["org:*"],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/connectors/${connector.id}/documents/${otherDocument.id}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+  });
+
+  describe("DELETE /api/connectors/:id/documents/:docId", () => {
+    test("deletes a connector document and cascades to chunks", async () => {
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "Connector Delete Docs",
+        connectorType: "jira",
+        config: {
+          type: "jira",
+          jiraBaseUrl: "https://connector-delete.atlassian.net",
+          isCloud: true,
+          projectKey: "CDD",
+        },
+      });
+      const document = await KbDocumentModel.create({
+        organizationId,
+        sourceId: "connector-delete-doc",
+        connectorId: connector.id,
+        title: "Delete Connector Doc",
+        content: "delete connector content",
+        contentHash: "hash-delete-connector",
+        acl: ["org:*"],
+      });
+      await KbChunkModel.insertMany([
+        {
+          documentId: document.id,
+          content: "connector delete chunk",
+          chunkIndex: 0,
+          acl: ["org:*"],
+        },
+      ]);
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/api/connectors/${connector.id}/documents/${document.id}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ success: true });
+      expect(await KbDocumentModel.findById(document.id)).toBeNull();
+      expect(await KbChunkModel.findByDocument(document.id)).toEqual([]);
     });
   });
 
@@ -620,6 +864,278 @@ describe("knowledge base routes", () => {
 
       expect(getResponse.statusCode).toBe(200);
       expect(getResponse.json().name).toBe("Persisted Name");
+    });
+
+    test("switching a GitHub App connector to PAT creates an inline secret", async () => {
+      const appSecret = await secretManager().createSecret(
+        { apiToken: "-----BEGIN PRIVATE KEY-----" },
+        "app",
+      );
+      const appConfig = await GithubAppConfigModel.create({
+        organizationId,
+        name: "App",
+        appId: "1",
+        installationId: "1",
+        secretId: appSecret.id,
+      });
+      // App connectors hold no inline secret — credentials live in the config row
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "App Connector",
+        connectorType: "github",
+        config: {
+          type: "github",
+          githubUrl: "https://api.github.com",
+          owner: "test-org",
+          authMethod: "github_app",
+          githubAppConfigId: appConfig.id,
+        },
+        secretId: null,
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/connectors/${connector.id}`,
+        payload: {
+          config: {
+            type: "github",
+            githubUrl: "https://api.github.com",
+            owner: "test-org",
+            authMethod: "pat",
+          },
+          credentials: { apiToken: "ghp_token" },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const newSecretId = response.json().secretId;
+      expect(newSecretId).toBeTruthy();
+      const secret = await secretManager().getSecret(newSecretId);
+      expect((secret?.secret as { apiToken?: string })?.apiToken).toBe(
+        "ghp_token",
+      );
+    });
+
+    test("rejects inline credentials on a GitHub App connector update", async ({
+      makeMember,
+    }) => {
+      await makeMember(user.id, organizationId, { role: ADMIN_ROLE_NAME });
+      const appConfig = await GithubAppConfigModel.create({
+        organizationId,
+        name: "App",
+        appId: "1",
+        installationId: "1",
+      });
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "App Connector",
+        connectorType: "github",
+        config: {
+          type: "github",
+          githubUrl: "https://api.github.com",
+          owner: "test-org",
+          authMethod: "github_app",
+          githubAppConfigId: appConfig.id,
+        },
+        secretId: null,
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/connectors/${connector.id}`,
+        payload: { credentials: { apiToken: "ghp_token" } },
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    test("switching a GitHub App connector to PAT without credentials is rejected", async ({
+      makeMember,
+    }) => {
+      await makeMember(user.id, organizationId, { role: ADMIN_ROLE_NAME });
+      const appConfig = await GithubAppConfigModel.create({
+        organizationId,
+        name: "App",
+        appId: "1",
+        installationId: "1",
+      });
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "App Connector",
+        connectorType: "github",
+        config: {
+          type: "github",
+          githubUrl: "https://api.github.com",
+          owner: "test-org",
+          authMethod: "github_app",
+          githubAppConfigId: appConfig.id,
+        },
+        secretId: null,
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/connectors/${connector.id}`,
+        payload: {
+          config: {
+            type: "github",
+            githubUrl: "https://api.github.com",
+            owner: "test-org",
+            authMethod: "pat",
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    test("a rejected App switch does not drop the connector's existing secret", async ({
+      makeMember,
+    }) => {
+      await makeMember(user.id, organizationId, { role: ADMIN_ROLE_NAME });
+      const appConfig = await GithubAppConfigModel.create({
+        organizationId,
+        name: "App",
+        appId: "1",
+        installationId: "1",
+      });
+      const secret = await secretManager().createSecret(
+        { apiToken: "ghp_existing" },
+        "pat-connector",
+      );
+      const connector = await KnowledgeBaseConnectorModel.create({
+        organizationId,
+        name: "PAT Connector",
+        connectorType: "github",
+        visibility: "org-wide",
+        teamIds: [],
+        config: {
+          type: "github",
+          githubUrl: "https://api.github.com",
+          owner: "test-org",
+          authMethod: "pat",
+        },
+        secretId: secret.id,
+      });
+
+      // switch to App auth while tripping the team-scoped validation; the
+      // request must fail without having deleted the original secret first
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/connectors/${connector.id}`,
+        payload: {
+          visibility: "team-scoped",
+          teamIds: [],
+          config: {
+            type: "github",
+            githubUrl: "https://api.github.com",
+            owner: "test-org",
+            authMethod: "github_app",
+            githubAppConfigId: appConfig.id,
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const stored = await KnowledgeBaseConnectorModel.findById(connector.id);
+      expect(stored?.secretId).toBe(secret.id);
+      expect(await secretManager().getSecret(secret.id)).not.toBeNull();
+    });
+
+    test("a GitHub App connector adopts the App config's host", async ({
+      makeMember,
+    }) => {
+      await makeMember(user.id, organizationId, { role: ADMIN_ROLE_NAME });
+      const appConfig = await GithubAppConfigModel.create({
+        organizationId,
+        name: "GHES App",
+        githubUrl: "https://ghe.example.com/api/v3",
+        appId: "1",
+        installationId: "1",
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/connectors",
+        payload: {
+          name: "GHES Connector",
+          visibility: "org-wide",
+          teamIds: [],
+          connectorType: "github",
+          // the form may leave the default github.com host; the saved connector
+          // must inherit the App config's host so the minted token matches
+          config: {
+            type: "github",
+            githubUrl: "https://api.github.com",
+            owner: "test-org",
+            authMethod: "github_app",
+            githubAppConfigId: appConfig.id,
+          },
+          schedule: "0 */6 * * *",
+          enabled: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().config.githubUrl).toBe(
+        "https://ghe.example.com/api/v3",
+      );
+    });
+
+    test("creating a GitHub App connector requires githubAppConfig:read", async () => {
+      // the default test user has no githubAppConfig permission
+      const appConfig = await GithubAppConfigModel.create({
+        organizationId,
+        name: "App",
+        appId: "1",
+        installationId: "1",
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/connectors",
+        payload: {
+          name: "App Connector",
+          visibility: "org-wide",
+          teamIds: [],
+          connectorType: "github",
+          config: {
+            type: "github",
+            githubUrl: "https://api.github.com",
+            owner: "test-org",
+            authMethod: "github_app",
+            githubAppConfigId: appConfig.id,
+          },
+          schedule: "0 */6 * * *",
+          enabled: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(403);
+    });
+
+    test("rejects a malformed githubAppConfigId before it reaches the database", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/connectors",
+        payload: {
+          name: "App Connector",
+          visibility: "org-wide",
+          teamIds: [],
+          connectorType: "github",
+          config: {
+            type: "github",
+            githubUrl: "https://api.github.com",
+            owner: "test-org",
+            authMethod: "github_app",
+            githubAppConfigId: "not-a-uuid",
+          },
+          schedule: "0 */6 * * *",
+          enabled: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
     });
 
     test("does not refresh ACLs when visibility inputs are unchanged", async () => {
@@ -1235,7 +1751,9 @@ describe("knowledge base routes", () => {
 
 describe("knowledge base permission configuration", () => {
   test("member permissions only allow read and query for knowledgeSource", async () => {
-    const { memberPermissions } = await import("@shared/access-control");
+    const { memberPermissions } = await import(
+      "@archestra/shared/access-control"
+    );
     expect(memberPermissions.knowledgeSource).toEqual(["read", "query"]);
     expect(memberPermissions.knowledgeSource).not.toContain("create");
     expect(memberPermissions.knowledgeSource).not.toContain("update");
@@ -1243,7 +1761,9 @@ describe("knowledge base permission configuration", () => {
   });
 
   test("admin permissions include full CRUD for knowledgeSource", async () => {
-    const { adminPermissions } = await import("@shared/access-control");
+    const { adminPermissions } = await import(
+      "@archestra/shared/access-control"
+    );
     expect(adminPermissions.knowledgeSource).toContain("read");
     expect(adminPermissions.knowledgeSource).toContain("create");
     expect(adminPermissions.knowledgeSource).toContain("update");
@@ -1253,9 +1773,9 @@ describe("knowledge base permission configuration", () => {
 
   test("knowledge base routes require correct permissions", async () => {
     const { requiredEndpointPermissionsMap } = await import(
-      "@shared/access-control"
+      "@archestra/shared/access-control"
     );
-    const { RouteId } = await import("@shared");
+    const { RouteId } = await import("@archestra/shared");
 
     // Read routes require knowledgeSource:read
     expect(requiredEndpointPermissionsMap[RouteId.GetKnowledgeBases]).toEqual({
@@ -1311,9 +1831,9 @@ describe("knowledge base permission configuration", () => {
 
   test("member cannot have create, update, or delete access to knowledge base routes", async () => {
     const { memberPermissions, requiredEndpointPermissionsMap } = await import(
-      "@shared/access-control"
+      "@archestra/shared/access-control"
     );
-    const { RouteId } = await import("@shared");
+    const { RouteId } = await import("@archestra/shared");
 
     const memberKbActions = memberPermissions.knowledgeSource;
 

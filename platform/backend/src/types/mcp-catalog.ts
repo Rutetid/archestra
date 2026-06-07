@@ -4,7 +4,7 @@ import {
   LocalConfigEnvironmentDefaultSchema,
   LocalConfigSchema,
   OAuthConfigSchema,
-} from "@shared";
+} from "@archestra/shared";
 import {
   createInsertSchema,
   createSelectSchema,
@@ -99,21 +99,40 @@ const CatalogLabelSchema = z.object({
   value: z.string().min(1),
 });
 
+// The preset feature is removed. Its columns remain on the Drizzle table
+// (non-destructive — see database/schemas/internal-mcp-catalog.ts) but are no
+// longer exposed by the API, so they are omitted from the derived schemas.
+const PRESET_COLUMNS_OMIT = {
+  parentCatalogItemId: true,
+  childName: true,
+  presetEntryId: true,
+  presetFieldValues: true,
+  presetSecretId: true,
+} as const;
+
 export const SelectInternalMcpCatalogSchema = createSelectSchema(
   schema.internalMcpCatalogTable,
-).extend({
-  serverType: InternalMcpCatalogServerTypeSchema,
-  authFields: z.array(AuthFieldSchema).nullable(),
-  userConfig: z.record(z.string(), UserConfigFieldSchema).nullable(),
-  oauthConfig: OAuthConfigSchema.nullable(),
-  enterpriseManagedConfig: EnterpriseManagedCredentialConfigSchema.nullable(),
-  localConfig: LocalConfigSelectSchema.nullable(),
-  // Labels are loaded from the junction table, not from the DB row
-  labels: z.array(CatalogLabelSchema).default([]),
-  // Teams are loaded from the junction table, not from the DB row
-  teams: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
-  authorName: z.string().nullable().optional(),
-});
+)
+  .omit(PRESET_COLUMNS_OMIT)
+  .extend({
+    serverType: InternalMcpCatalogServerTypeSchema,
+    authFields: z.array(AuthFieldSchema).nullable(),
+    userConfig: z.record(z.string(), UserConfigFieldSchema).nullable(),
+    oauthConfig: OAuthConfigSchema.nullable(),
+    enterpriseManagedConfig: EnterpriseManagedCredentialConfigSchema.nullable(),
+    localConfig: LocalConfigSelectSchema.nullable(),
+    clonedFrom: z.string().uuid().nullable(),
+    // Labels are loaded from the junction table, not from the DB row
+    labels: z.array(CatalogLabelSchema).default([]),
+    // Teams are loaded from the junction table, not from the DB row
+    teams: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
+    authorName: z.string().nullable().optional(),
+  });
+
+export const ListInternalMcpCatalogSchema =
+  SelectInternalMcpCatalogSchema.extend({
+    toolCount: z.number().int().default(0),
+  });
 
 const InsertInternalMcpCatalogSchemaBase = createInsertSchema(
   schema.internalMcpCatalogTable,
@@ -132,6 +151,7 @@ const InsertInternalMcpCatalogSchemaBase = createInsertSchema(
     enterpriseManagedConfig:
       EnterpriseManagedCredentialConfigSchema.nullable().optional(),
     localConfig: LocalConfigSchema.nullable().optional(),
+    clonedFrom: z.string().uuid().nullable().optional(),
     // Labels are synced separately via McpCatalogLabelModel
     labels: z.array(CatalogLabelSchema).optional(),
     // Team IDs for team scope (synced separately)
@@ -142,6 +162,7 @@ const InsertInternalMcpCatalogSchemaBase = createInsertSchema(
     updatedAt: true,
     organizationId: true,
     authorId: true,
+    ...PRESET_COLUMNS_OMIT,
   });
 
 export const InsertInternalMcpCatalogSchema =
@@ -175,6 +196,9 @@ const UpdateInternalMcpCatalogSchemaBase = createUpdateSchema(
     authorId: true,
     // Tenancy is locked after creation
     multitenant: true,
+    // Clone lineage is locked after creation
+    clonedFrom: true,
+    ...PRESET_COLUMNS_OMIT,
   });
 
 export const UpdateInternalMcpCatalogSchema =
@@ -191,6 +215,9 @@ export type InternalMcpCatalogServerType = z.infer<
 
 export type AuthField = z.infer<typeof AuthFieldSchema>;
 export type UserConfigField = z.infer<typeof UserConfigFieldSchema>;
+export type UserConfigFieldDefault = z.infer<
+  typeof UserConfigFieldDefaultSchema
+>;
 export type UserConfig = Record<string, UserConfigField>;
 export type OAuthConfig = z.infer<typeof OAuthConfigSchema>;
 
@@ -198,6 +225,9 @@ export type OAuthConfig = z.infer<typeof OAuthConfigSchema>;
 export type LocalConfig = z.infer<typeof LocalConfigSelectSchema>;
 
 export type InternalMcpCatalog = z.infer<typeof SelectInternalMcpCatalogSchema>;
+export type ListInternalMcpCatalog = z.infer<
+  typeof ListInternalMcpCatalogSchema
+>;
 export type InsertInternalMcpCatalog = z.infer<
   typeof InsertInternalMcpCatalogSchema
 >;
@@ -233,7 +263,10 @@ function validateInternalMcpCatalog(
   value: {
     serverType?: InternalMcpCatalogServerType;
     enterpriseManagedConfig?: unknown;
-    localConfig?: { transportType?: "stdio" | "streamable-http" } | null;
+    localConfig?: {
+      transportType?: "stdio" | "streamable-http";
+      environment?: Array<{ key: string }>;
+    } | null;
     userConfig?: Record<string, UserConfigField> | null;
   },
   ctx: z.RefinementCtx,
@@ -265,15 +298,32 @@ function validateHeaderMappedUserConfig(
     }
     normalizedHeaderNames.set(normalizedHeaderName, fieldName);
 
-    if (
-      fieldConfig.sensitive === true &&
-      fieldConfig.promptOnInstallation === false
-    ) {
+    // A header value is "static" (= persisted in plaintext at
+    // `userConfig[field].default` on the catalog row) when it is not
+    // install-prompted.
+    const isStaticHeader = fieldConfig.promptOnInstallation === false;
+    if (fieldConfig.sensitive === true && isStaticHeader) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["userConfig", fieldName, "sensitive"],
         message:
           "Static header-mapped userConfig fields cannot be marked sensitive.",
+      });
+    }
+
+    // Sensitive header-mapped fields must not carry a plaintext `default`.
+    // `default` is persisted as-is in the catalog row's userConfig jsonb, so
+    // a sensitive default would land in plaintext on the row.
+    if (
+      fieldConfig.sensitive === true &&
+      fieldConfig.default !== undefined &&
+      !isStaticHeader
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["userConfig", fieldName, "default"],
+        message:
+          "Sensitive header-mapped userConfig fields cannot carry a plaintext default. Supply the value via the per-install Secret bag (installation scope) instead.",
       });
     }
   }

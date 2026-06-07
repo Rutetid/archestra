@@ -1,4 +1,4 @@
-import type { AnyRoleName } from "@shared";
+import type { AnyRoleName } from "@archestra/shared";
 import { and, count, eq, ilike, inArray, or } from "drizzle-orm";
 import db, { schema, type Transaction } from "@/database";
 import { createPaginatedResult } from "@/database/utils/pagination";
@@ -53,12 +53,13 @@ class MemberModel {
 
   /**
    * Get a member by user ID and organization ID.
+   *
+   * The member table has no unique constraint on (userId, organizationId).
+   * Order by createdAt so a stale duplicate row can't shadow the seeded one:
+   * the original membership is always older than any later duplicate created
+   * (e.g. by an auto-accepted invitation), so it wins.
    */
   static async getByUserId(userId: string, organizationId: string) {
-    // logger.debug(
-    //   { userId, organizationId },
-    //   "MemberModel.getByUserId: fetching member",
-    // );
     const [member] = await db
       .select()
       .from(schema.membersTable)
@@ -68,11 +69,8 @@ class MemberModel {
           eq(schema.membersTable.organizationId, organizationId),
         ),
       )
+      .orderBy(schema.membersTable.createdAt, schema.membersTable.id)
       .limit(1);
-    // logger.debug(
-    //   { userId, organizationId, found: !!member },
-    //   "MemberModel.getByUserId: completed",
-    // );
     return member;
   }
 
@@ -89,6 +87,7 @@ class MemberModel {
       .select()
       .from(schema.membersTable)
       .where(eq(schema.membersTable.userId, userId))
+      .orderBy(schema.membersTable.createdAt, schema.membersTable.id)
       .limit(1);
     logger.debug(
       { userId, found: !!member, organizationId: member?.organizationId },
@@ -198,6 +197,8 @@ class MemberModel {
         id: schema.usersTable.id,
         name: schema.usersTable.name,
         email: schema.usersTable.email,
+        role: schema.membersTable.role,
+        systemRole: schema.usersTable.role,
       })
       .from(schema.membersTable)
       .innerJoin(
@@ -211,39 +212,6 @@ class MemberModel {
       "MemberModel.findAllByOrganization: completed",
     );
     return results;
-  }
-
-  /**
-   * List org members eligible to be impersonated by an admin: excludes a
-   * given user (typically the caller) and excludes anyone whose system-level
-   * `user.role` is "admin" (better-auth's adminRoles guard would reject
-   * those at impersonation time anyway).
-   */
-  static async findImpersonationCandidates(params: {
-    organizationId: string;
-    excludeUserId: string;
-  }) {
-    const rows = await db
-      .select({
-        id: schema.usersTable.id,
-        name: schema.usersTable.name,
-        email: schema.usersTable.email,
-        role: schema.membersTable.role,
-        systemRole: schema.usersTable.role,
-      })
-      .from(schema.membersTable)
-      .innerJoin(
-        schema.usersTable,
-        eq(schema.membersTable.userId, schema.usersTable.id),
-      )
-      .where(eq(schema.membersTable.organizationId, params.organizationId))
-      .orderBy(schema.usersTable.name);
-
-    return rows
-      .filter(
-        (row) => row.id !== params.excludeUserId && row.systemRole !== "admin",
-      )
-      .map(({ systemRole: _systemRole, ...rest }) => rest);
   }
 
   static async findUserIdsInOrganization(params: {
@@ -421,6 +389,55 @@ class MemberModel {
   }
 
   /**
+   * Set the member's default model and API key. The two are a pair — callers
+   * must pass both or neither (see `isModelSelectionComplete`).
+   */
+  static async setDefaultModelSelection(params: {
+    userId: string;
+    organizationId: string;
+    modelId: string | null;
+    apiKeyId: string | null;
+  }) {
+    const { userId, organizationId, modelId, apiKeyId } = params;
+    await db
+      .update(schema.membersTable)
+      .set({ defaultModelId: modelId, defaultChatApiKeyId: apiKeyId })
+      .where(
+        and(
+          eq(schema.membersTable.userId, userId),
+          eq(schema.membersTable.organizationId, organizationId),
+        ),
+      );
+  }
+
+  /**
+   * Get the member's default (model, key) pair. Either both ids are set or
+   * both are null (see `isModelSelectionComplete`).
+   */
+  static async getDefaultModelSelection(
+    userId: string,
+    organizationId: string,
+  ): Promise<{ modelId: string | null; chatApiKeyId: string | null }> {
+    const [member] = await db
+      .select({
+        defaultModelId: schema.membersTable.defaultModelId,
+        defaultChatApiKeyId: schema.membersTable.defaultChatApiKeyId,
+      })
+      .from(schema.membersTable)
+      .where(
+        and(
+          eq(schema.membersTable.userId, userId),
+          eq(schema.membersTable.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+    return {
+      modelId: member?.defaultModelId ?? null,
+      chatApiKeyId: member?.defaultChatApiKeyId ?? null,
+    };
+  }
+
+  /**
    * Get the default agent ID for a member
    */
   static async getDefaultAgentId(
@@ -443,6 +460,59 @@ class MemberModel {
   /**
    * Check if any member references the given agent as their default
    */
+  static async findByIdForAudit(
+    id: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const [row] = await db
+      .select()
+      .from(schema.membersTable)
+      .where(
+        and(
+          eq(schema.membersTable.id, id),
+          eq(schema.membersTable.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      userId: row.userId,
+      role: row.role,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  static async findByUserIdForAudit(
+    userId: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const [row] = await db
+      .select()
+      .from(schema.membersTable)
+      .where(
+        and(
+          eq(schema.membersTable.userId, userId),
+          eq(schema.membersTable.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      userId: row.userId,
+      role: row.role,
+      defaultAgentId: row.defaultAgentId ?? null,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
   static async isAgentDefault(agentId: string): Promise<boolean> {
     const [result] = await db
       .select({ count: count() })

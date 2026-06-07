@@ -1,6 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import type { PassThrough } from "node:stream";
-import type { ClientWebSocketMessage, McpDeploymentStatusEntry } from "@shared";
+import type {
+  ClientWebSocketMessage,
+  McpDeploymentStatusEntry,
+} from "@archestra/shared";
 import { eq } from "drizzle-orm";
 import { vi } from "vitest";
 import { WebSocket as WS } from "ws";
@@ -72,6 +75,7 @@ const service = websocketService as unknown as {
   mcpExecSubscriptions: Map<WS, McpExecSubscription>;
   mcpDeploymentStatusSubscriptions: Map<WS, McpDeploymentStatusSubscription>;
   initBrowserStreamContextForTesting: () => void;
+  wss: { clients: Set<WS> } | null;
 };
 
 // Initialize browser stream context once for all tests (config mock is already applied)

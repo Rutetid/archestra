@@ -1,4 +1,4 @@
-import type { PaginationQuery } from "@shared";
+import type { PaginationQuery } from "@archestra/shared";
 import {
   and,
   asc,
@@ -20,15 +20,8 @@ import {
   type PaginatedResult,
 } from "@/database/utils/pagination";
 import type { InsertMcpToolCall, McpToolCall, SortingQuery } from "@/types";
+import { escapeLikePattern } from "@/utils/sql-search";
 import AgentTeamModel from "./agent-team";
-
-/**
- * Escapes special LIKE pattern characters (%, _, \) to treat them as literals.
- * This prevents users from crafting searches that behave unexpectedly.
- */
-function escapeLikePattern(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
-}
 
 /**
  * Builds a search condition for MCP tool calls across server name, method, tool name, arguments, and result.
@@ -116,11 +109,16 @@ class McpToolCallModel {
         .select({
           ...getTableColumns(schema.mcpToolCallsTable),
           userName: schema.usersTable.name,
+          agentDeletedAt: schema.agentsTable.deletedAt,
         })
         .from(schema.mcpToolCallsTable)
         .leftJoin(
           schema.usersTable,
           eq(schema.mcpToolCallsTable.userId, schema.usersTable.id),
+        )
+        .leftJoin(
+          schema.agentsTable,
+          eq(schema.mcpToolCallsTable.agentId, schema.agentsTable.id),
         )
         .where(whereClause)
         .orderBy(orderByClause)
@@ -133,7 +131,7 @@ class McpToolCallModel {
     ]);
 
     return createPaginatedResult(
-      data as McpToolCall[],
+      data.map(toVisibleMcpToolCall),
       Number(total),
       pagination,
     );
@@ -169,11 +167,16 @@ class McpToolCallModel {
       .select({
         ...getTableColumns(schema.mcpToolCallsTable),
         userName: schema.usersTable.name,
+        agentDeletedAt: schema.agentsTable.deletedAt,
       })
       .from(schema.mcpToolCallsTable)
       .leftJoin(
         schema.usersTable,
         eq(schema.mcpToolCallsTable.userId, schema.usersTable.id),
+      )
+      .leftJoin(
+        schema.agentsTable,
+        eq(schema.mcpToolCallsTable.agentId, schema.agentsTable.id),
       )
       .where(eq(schema.mcpToolCallsTable.id, id));
 
@@ -197,7 +200,7 @@ class McpToolCallModel {
       }
     }
 
-    return mcpToolCall;
+    return toVisibleMcpToolCall(mcpToolCall);
   }
 
   static async getAllMcpToolCallsForAgent(
@@ -298,3 +301,18 @@ class McpToolCallModel {
 }
 
 export default McpToolCallModel;
+
+function toVisibleMcpToolCall(
+  row: McpToolCall & { agentDeletedAt?: Date | null },
+): McpToolCall {
+  const { agentDeletedAt: _agentDeletedAt, ...toolCall } = row;
+
+  if (row.agentDeletedAt) {
+    return {
+      ...toolCall,
+      agentId: null,
+    };
+  }
+
+  return toolCall;
+}

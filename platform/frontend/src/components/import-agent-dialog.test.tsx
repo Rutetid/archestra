@@ -78,9 +78,7 @@ const validPayload = {
     icon: "🤖",
     scope: "personal",
     considerContextUntrusted: false,
-    toolAssignmentMode: "manual",
     toolExposureMode: "full",
-    llmModel: "gpt-4o",
     incomingEmailEnabled: false,
     incomingEmailSecurityMode: "private",
     incomingEmailAllowedDomain: null,
@@ -212,9 +210,6 @@ describe("ImportAgentDialog", () => {
     expect(screen.getByText(/Delegations \(1\)/i)).toBeInTheDocument();
     expect(screen.getByText(/Knowledge \(1\)/i)).toBeInTheDocument();
     expect(screen.getByText(/Connectors \(1\)/i)).toBeInTheDocument();
-
-    // LLM model informational
-    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
 
     // Import button is now shown
     expect(

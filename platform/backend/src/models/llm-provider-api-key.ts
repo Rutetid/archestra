@@ -3,7 +3,7 @@ import {
   isVaultReference,
   parseVaultReference,
   type SupportedProvider,
-} from "@shared";
+} from "@archestra/shared";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { isAzureOpenAiEntraIdEnabled } from "@/clients/azure-openai-credentials";
 import db, { schema } from "@/database";
@@ -17,6 +17,7 @@ import type {
   UpdateLlmProviderApiKey,
 } from "@/types";
 import { decryptSecretValue, isEncryptedSecret } from "@/utils/crypto";
+import { escapeLikePattern } from "@/utils/sql-search";
 import ConversationModel from "./conversation";
 
 class LlmProviderApiKeyModel {
@@ -165,6 +166,7 @@ class LlmProviderApiKeyModel {
         provider: schema.llmProviderApiKeysTable.provider,
         secretId: schema.llmProviderApiKeysTable.secretId,
         baseUrl: schema.llmProviderApiKeysTable.baseUrl,
+        inferenceBaseUrl: schema.llmProviderApiKeysTable.inferenceBaseUrl,
         extraHeaders: schema.llmProviderApiKeysTable.extraHeaders,
         scope: schema.llmProviderApiKeysTable.scope,
         userId: schema.llmProviderApiKeysTable.userId,
@@ -290,6 +292,7 @@ class LlmProviderApiKeyModel {
         provider: schema.llmProviderApiKeysTable.provider,
         secretId: schema.llmProviderApiKeysTable.secretId,
         baseUrl: schema.llmProviderApiKeysTable.baseUrl,
+        inferenceBaseUrl: schema.llmProviderApiKeysTable.inferenceBaseUrl,
         extraHeaders: schema.llmProviderApiKeysTable.extraHeaders,
         scope: schema.llmProviderApiKeysTable.scope,
         userId: schema.llmProviderApiKeysTable.userId,
@@ -385,7 +388,7 @@ class LlmProviderApiKeyModel {
       if (
         conversationKey &&
         conversationKey.provider === provider &&
-        conversationKey.secretId
+        canUseProviderApiKey(conversationKey)
       ) {
         // If conversation's key matches agent's configured key, skip user access check
         if (
@@ -411,7 +414,11 @@ class LlmProviderApiKeyModel {
     //    (no user permission check — permission flows through agent access)
     if (agentLlmApiKeyId) {
       const agentKey = await LlmProviderApiKeyModel.findById(agentLlmApiKeyId);
-      if (agentKey && agentKey.provider === provider && agentKey.secretId) {
+      if (
+        agentKey &&
+        agentKey.provider === provider &&
+        canUseProviderApiKey(agentKey)
+      ) {
         return agentKey;
       }
     }
@@ -701,16 +708,42 @@ class LlmProviderApiKeyModel {
    * Used to determine which providers are "configured" for model filtering,
    * independent of whether model sync has linked models to those keys.
    */
+  static async findByIdForAudit(
+    id: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const [row] = await db
+      .select()
+      .from(schema.llmProviderApiKeysTable)
+      .where(
+        and(
+          eq(schema.llmProviderApiKeysTable.id, id),
+          eq(schema.llmProviderApiKeysTable.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!row) return null;
+
+    // REDACTED: secretId and any resolved key material are never included.
+    return {
+      id: row.id,
+      name: row.name,
+      provider: row.provider,
+      organizationId: row.organizationId,
+      scope: row.scope,
+      baseUrl: row.baseUrl ?? null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
   static async getConfiguredProviders(): Promise<Set<string>> {
     const rows = await db
       .selectDistinct({ provider: schema.llmProviderApiKeysTable.provider })
       .from(schema.llmProviderApiKeysTable);
     return new Set(rows.map((r) => r.provider));
   }
-}
-
-function escapeLikePattern(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
 }
 
 /**
@@ -733,6 +766,18 @@ function parseVaultReferenceFromSecret(
     };
   }
   return null;
+}
+
+function canUseProviderApiKey(
+  apiKey: Pick<LlmProviderApiKey, "provider" | "secretId">,
+): boolean {
+  if (apiKey.secretId) {
+    return true;
+  }
+
+  return getProvidersWithOptionalApiKey({
+    azureEntraIdEnabled: isAzureOpenAiEntraIdEnabled(),
+  }).includes(apiKey.provider);
 }
 
 export default LlmProviderApiKeyModel;

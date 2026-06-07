@@ -1,5 +1,6 @@
 "use client";
 
+import type { Permissions } from "@archestra/shared";
 import { X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
@@ -21,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UserSearchableMultiSelect } from "@/components/user-searchable-multi-select";
 import { useLabelKeys, useLabelValues } from "@/lib/agent.query";
 import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { useOrganizationMembers } from "@/lib/organization.query";
@@ -28,6 +30,7 @@ import { useTeams } from "@/lib/teams/team.query";
 
 type ScopeValue = "personal" | "team" | "org" | "built_in";
 type OwnerValue = "mine" | "others";
+type StatusValue = "active" | "deleted";
 
 export function AgentScopeFilter({
   showBuiltIn = false,
@@ -156,13 +159,14 @@ export function AgentScopeFilter({
     [teams],
   );
 
-  const memberItems = useMemo(
+  const userOptions = useMemo(
     () =>
       (members ?? [])
         .filter((m) => m.id !== currentUserId)
         .map((m) => ({
-          value: m.id,
-          label: m.name || m.email,
+          userId: m.id,
+          name: m.name,
+          email: m.email,
         })),
     [members, currentUserId],
   );
@@ -218,10 +222,10 @@ export function AgentScopeFilter({
         />
       )}
       {showMembersMultiSelect && (
-        <MultiSelect
+        <UserSearchableMultiSelect
           value={selectedAuthorIds}
           onValueChange={handleAuthorIdsChange}
-          items={memberItems}
+          users={userOptions}
           placeholder="All users"
           className="w-[220px]"
           showSelectedBadges={false}
@@ -233,6 +237,47 @@ export function AgentScopeFilter({
         LabelKeyRowComponent={AgentLabelKeyRow}
       />
     </div>
+  );
+}
+
+export function AgentDeletedStatusFilter({
+  deletePermission,
+}: {
+  deletePermission: Permissions;
+}) {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { data: canDelete } = useHasPermissions(deletePermission);
+
+  const status = (searchParams.get("status") as StatusValue | null) ?? "active";
+
+  const handleStatusChange = useCallback(
+    (value: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (value === "deleted") {
+        params.set("status", "deleted");
+      } else {
+        params.delete("status");
+      }
+      params.set("page", "1");
+      router.push(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [searchParams, router, pathname],
+  );
+
+  if (!canDelete) return null;
+
+  return (
+    <Select value={status} onValueChange={handleStatusChange}>
+      <SelectTrigger className="w-[150px]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent position="popper" side="bottom" align="start">
+        <SelectItem value="active">Active</SelectItem>
+        <SelectItem value="deleted">Deleted</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }
 

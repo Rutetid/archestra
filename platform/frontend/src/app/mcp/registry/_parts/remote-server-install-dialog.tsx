@@ -1,6 +1,6 @@
 "use client";
 
-import type { archestraApiTypes } from "@shared";
+import type { archestraApiTypes } from "@archestra/shared";
 import { AlertTriangle, Info, ShieldCheck, User } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { StandardFormDialog } from "@/components/standard-dialog";
@@ -50,6 +50,8 @@ type UserConfigType = Record<
 >;
 
 export interface RemoteServerInstallResult {
+  /** Catalog id to install from. */
+  catalogId: string;
   metadata: Record<string, unknown>;
   /** Installation scope (personal, team, org) */
   scope: McpServerInstallScope;
@@ -70,6 +72,16 @@ interface RemoteServerInstallDialogProps {
   isInstalling: boolean;
   /** When true, shows re-authentication mode (info banner, different title) */
   isReauth?: boolean;
+  /**
+   * Reinstall mode — same form layout as reauth but submits to the reinstall
+   * route. Used when a catalog edit added new required userConfig fields and
+   * the existing install needs values for them.
+   */
+  isReinstall?: boolean;
+  /** Scope of the install being reinstalled (locks the scope picker). */
+  existingScope?: McpServerInstallScope;
+  /** Team of the install being reinstalled (null for personal/org). */
+  existingTeamId?: string | null;
   /** Pre-select a specific team in the credential type selector */
   preselectedTeamId?: string | null;
   /** When true, only personal installation is allowed */
@@ -85,6 +97,9 @@ export function RemoteServerInstallDialog({
   catalogItem,
   isInstalling,
   isReauth = false,
+  isReinstall = false,
+  existingScope,
+  existingTeamId,
   preselectedTeamId,
   personalOnly = false,
   orgOnly = false,
@@ -189,6 +204,7 @@ export function RemoteServerInstallDialog({
       }
 
       await onConfirm(catalogItem, {
+        catalogId: catalogItem.id,
         metadata,
         scope,
         teamId: selectedTeamId,
@@ -264,7 +280,11 @@ export function RemoteServerInstallDialog({
           <div className="flex items-end gap-2">
             <User className="h-5 w-5" />
             <span>
-              {isReauth ? "Re-authenticate" : "Install Server"}
+              {isReauth
+                ? "Re-authenticate"
+                : isReinstall
+                  ? "Reinstall Server"
+                  : "Install Server"}
               <span className="text-muted-foreground ml-2 font-normal">
                 {catalogItem.name}
               </span>
@@ -296,10 +316,14 @@ export function RemoteServerInstallDialog({
               {isInstalling
                 ? isReauth
                   ? "Updating..."
-                  : "Installing..."
+                  : isReinstall
+                    ? "Reinstalling..."
+                    : "Installing..."
                 : isReauth
                   ? "Update Credentials"
-                  : "Install"}
+                  : isReinstall
+                    ? "Reinstall"
+                    : "Install"}
             </Button>
           </>
         ) : null
@@ -316,11 +340,25 @@ export function RemoteServerInstallDialog({
         </Alert>
       )}
 
+      {isReinstall && (
+        <Alert className="border-amber-500/50 bg-amber-500/10">
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
+          <AlertDescription>
+            This server's catalog now requires values that weren't asked for at
+            install time. Provide them below to finish the reinstall; existing
+            tool assignments are preserved.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <SelectMcpServerCredentialTypeAndTeams
         onTeamChange={setSelectedTeamId}
         catalogId={catalogItem?.id}
         onScopeChange={setScope}
         onCanInstallChange={setCanInstall}
+        isReinstall={isReinstall}
+        existingScope={existingScope}
+        existingTeamId={existingTeamId}
         preselectedTeamId={preselectedTeamId}
         personalOnly={personalOnly}
         orgOnly={orgOnly}

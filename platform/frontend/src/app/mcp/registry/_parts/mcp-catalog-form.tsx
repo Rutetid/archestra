@@ -1,8 +1,7 @@
 "use client";
 
+import { type archestraApiTypes, DocsPage } from "@archestra/shared";
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { archestraApiTypes } from "@shared";
-import { DocsPage } from "@shared";
 import {
   Ban,
   Code,
@@ -20,7 +19,7 @@ import {
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { lazy, useEffect, useMemo, useRef, useState } from "react";
-import { useFieldArray, useForm } from "react-hook-form";
+import { type UseFormReturn, useFieldArray, useForm } from "react-hook-form";
 import { AgentIconPicker } from "@/components/agent-icon-picker";
 import {
   type ProfileLabel,
@@ -33,18 +32,12 @@ import {
 } from "@/components/enterprise-managed-credential-fields";
 import { EnvironmentVariablesFormField } from "@/components/environment-variables-form-field";
 import { ExternalDocsLink } from "@/components/external-docs-link";
-import { InstallConfigFieldsTable } from "@/components/install-config-fields-table";
+import { HeaderDialog, type HeaderDraft } from "@/components/header-dialog";
+import { HeadersReadOnlyTable } from "@/components/headers-read-only-table";
+import { ReinstallConfirmBar } from "@/components/reinstall-confirm-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogHeader,
-  DialogStickyFooter,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Form,
   FormControl,
@@ -79,42 +72,42 @@ import {
 } from "@/components/visibility-selector";
 import { LOCAL_MCP_DISABLED_MESSAGE } from "@/consts";
 import { useHasPermissions } from "@/lib/auth/auth.query";
-import config from "@/lib/config/config";
+import { useIdentityProviders } from "@/lib/auth/identity-provider-read.query";
 import { useEnterpriseFeature, useFeature } from "@/lib/config/config.query";
 import { getFrontendDocsUrl } from "@/lib/docs/docs";
+import { useEnvironments } from "@/lib/environment.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
 import { useK8sImagePullSecrets } from "@/lib/mcp/internal-mcp-catalog.query";
 import {
   MCP_CONFIG_AUTOCOMPLETE,
   MCP_SECRET_AUTOCOMPLETE,
 } from "@/lib/mcp/mcp-form-autocomplete";
+import { useDefaultEnvironment } from "@/lib/organization.query";
 import { useGetSecret } from "@/lib/secrets.query";
 import { useTeams } from "@/lib/teams/team.query";
+import {
+  type CascadeSnapshot,
+  computeCascadeOutcome,
+} from "./cascade-decision";
 import {
   formSchema,
   type McpCatalogFormValues,
 } from "./mcp-catalog-form.types";
-import { transformCatalogItemToFormValues } from "./mcp-catalog-form.utils";
-
-const { useIdentityProviders } = config.enterpriseFeatures.core
-  ? // biome-ignore lint/style/noRestrictedImports: conditional EE query import for IdP selector
-    await import("@/lib/auth/identity-provider.query.ee")
-  : {
-      useIdentityProviders: (_params?: { enabled?: boolean }) => ({
-        data: [] as Array<{
-          id: string;
-          providerId: string;
-          issuer: string;
-          oidcConfig?: Record<string, unknown> | null;
-        }>,
-      }),
-    };
+import {
+  transformCatalogItemToFormValues,
+  transformFormToApiData,
+} from "./mcp-catalog-form.utils";
 
 const ExternalSecretSelector = lazy(
   () =>
     // biome-ignore lint/style/noRestrictedImports: lazy loading
     import("@/components/external-secret-selector.ee"),
 );
+
+// Sentinel value for the default environment option (null assignment). The shadcn
+// Select cannot use an empty-string item value, so a sentinel maps to `null`
+// (no environment assigned).
+const ENVIRONMENT_DEFAULT_VALUE = "__default__";
 
 interface McpCatalogFormProps {
   mode: "create" | "edit";
@@ -125,12 +118,20 @@ interface McpCatalogFormProps {
     | ((opts: { isDirty: boolean; onReset: () => void }) => React.ReactNode);
   nameDisabled?: boolean;
   catalogButton?: React.ReactNode;
+  /** Optional banner/notice rendered at the very top of the form body. */
+  notice?: React.ReactNode;
   formValues?: McpCatalogFormValues;
   /** Called when form dirty state changes */
   onDirtyChange?: (isDirty: boolean) => void;
   /** Ref to imperatively trigger form submission */
   submitRef?: React.MutableRefObject<(() => Promise<void>) | null>;
   embedded?: boolean;
+  /**
+   * Number of installed servers that would be affected by a cascade
+   * reinstall. Drives the inline confirm bar copy in edit mode. Defaults
+   * to 0 (no confirm bar — used for create mode and standalone previews).
+   */
+  affectedServerCount?: number;
 }
 
 export function McpCatalogForm({
@@ -140,10 +141,12 @@ export function McpCatalogForm({
   nameDisabled,
   footer,
   catalogButton,
+  notice,
   formValues,
   onDirtyChange,
   submitRef,
   embedded = false,
+  affectedServerCount = 0,
 }: McpCatalogFormProps) {
   const localConfigSecretId =
     initialValues?.serverType === "local"
@@ -168,17 +171,11 @@ export function McpCatalogForm({
   const mcpServerBaseImage = useFeature("mcpServerBaseImage") ?? "";
 
   const isLocalMcpEnabled = useFeature("orchestratorK8sRuntime");
-  const advancedToolFeaturesEnabled =
-    useFeature("advancedToolFeaturesEnabled") === true;
   const isEnterpriseCoreEnabled = useEnterpriseFeature("core");
   const appName = useAppName();
   const mcpAuthDocsUrl = getFrontendDocsUrl(
     DocsPage.McpAuthentication,
     "upstream-mcp-server-authentication",
-  );
-  const gatewayLabelsDocsUrl = getFrontendDocsUrl(
-    DocsPage.PlatformMcpGateway,
-    "tool-assignment-mode",
   );
   const mcpAuthTokenExchangeDocsUrl = getFrontendDocsUrl(
     DocsPage.McpAuthentication,
@@ -250,6 +247,7 @@ export function McpCatalogForm({
           },
           scope: "personal",
           teams: [],
+          environmentId: null,
         }),
   });
 
@@ -343,6 +341,10 @@ export function McpCatalogForm({
         (header) => header.includeBearerPrefix,
       );
       if (!hasAuthHeader) {
+        // Bearer-token credential — always sensitive. The Add Header
+        // dialog forces this choice on manual additions, but the
+        // token-auth flow seeds the row programmatically and so must
+        // own the default itself.
         appendAdditionalHeader({
           fieldName: undefined,
           headerName: "Authorization",
@@ -351,6 +353,7 @@ export function McpCatalogForm({
           value: "",
           description: "",
           includeBearerPrefix: true,
+          sensitive: true,
         });
       }
     }
@@ -410,6 +413,16 @@ export function McpCatalogForm({
     null,
   );
 
+  // Baseline `additionalHeaders` derived from `initialValues.userConfig`.
+  // Used by `isHeadersDirty`'s schema-evolution check — RHF's
+  // `dirtyFields.additionalHeaders` only tells us SOMETHING in the
+  // array changed; we need the actual prev shape to classify what kind
+  // of change (forward-compatible vs breaking).
+  const initialAdditionalHeaders = useMemo(
+    () => deriveAdditionalHeaders(initialValues?.userConfig),
+    [initialValues?.userConfig],
+  );
+
   // Labels state (managed separately from react-hook-form)
   const initialLabelsFromProps = useMemo(
     () =>
@@ -429,19 +442,49 @@ export function McpCatalogForm({
   // Granular dirty flags used to show contextual reinstall hints in edit mode.
   // Editing any of these on a deployed catalog item invalidates existing install
   // credentials or redeploys the pod — admins must reinstall + re-enter creds.
-  const isNameDirty = mode === "edit" && Boolean(dirtyFields.name);
-  const isServerUrlDirty = mode === "edit" && Boolean(dirtyFields.serverUrl);
+  //
+  // CAVEAT — react-hook-form's `dirtyFields` representation: for ARRAYS
+  // (additionalHeaders, localConfig.environment), it allocates an entry per
+  // array index with every leaf as a boolean. A form initialized with
+  // `additionalHeaders: [{...}]` (e.g., one header derived from userConfig)
+  // produces `dirtyFields.additionalHeaders = [{...all leaves false}]` —
+  // a NON-EMPTY ARRAY that is `Boolean(...)`-truthy even though nothing
+  // was actually edited. `isReallyDirty` walks the tree and only returns
+  // true when SOME leaf is actually true.
+  const isNameDirty = mode === "edit" && isReallyDirty(dirtyFields.name);
+  const isServerUrlDirty =
+    mode === "edit" && isReallyDirty(dirtyFields.serverUrl);
   const isAuthDirty =
     mode === "edit" &&
-    (Boolean(dirtyFields.authMethod) ||
-      Boolean(dirtyFields.authHeaderName) ||
-      Boolean(dirtyFields.includeBearerPrefix) ||
-      Boolean(dirtyFields.oauthConfig) ||
-      Boolean(dirtyFields.enterpriseManagedConfig));
+    (isReallyDirty(dirtyFields.authMethod) ||
+      isReallyDirty(dirtyFields.authHeaderName) ||
+      isReallyDirty(dirtyFields.includeBearerPrefix) ||
+      isReallyDirty(dirtyFields.oauthConfig) ||
+      isReallyDirty(dirtyFields.enterpriseManagedConfig));
+  // Env-var dirtiness alone isn't enough to require reinstall — adding an
+  // OPTIONAL prompted env var leaves existing installs valid (they just
+  // don't fill the new var). Mirror the backend's `promptedEnvVarsChanged`
+  // schema-evolution rules in `backend/src/services/mcp-reinstall.ts` so
+  // the bar's prediction matches what the backend will actually do.
   const isEnvDirty =
-    mode === "edit" && Boolean(dirtyFields.localConfig?.environment);
+    mode === "edit" &&
+    isReallyDirty(dirtyFields.localConfig?.environment) &&
+    envChangeRequiresReinstall(
+      initialValues?.localConfig?.environment,
+      form.watch("localConfig.environment"),
+    );
+  // Same shape as `isEnvDirty` — `additionalHeaders` array dirty is too
+  // coarse on its own (adding an OPTIONAL per-install header is forward-
+  // compatible — existing installs that don't fill it stay valid).
+  // Mirror of backend's userConfig schema-evolution semantics, see
+  // `additionalHeadersChangeRequiresReinstall` below.
   const isHeadersDirty =
-    mode === "edit" && Boolean(dirtyFields.additionalHeaders);
+    mode === "edit" &&
+    isReallyDirty(dirtyFields.additionalHeaders) &&
+    additionalHeadersChangeRequiresReinstall(
+      initialAdditionalHeaders,
+      form.watch("additionalHeaders"),
+    );
   // Per-field deployment dirty flags. Each of these maps to a field in the
   // backend's `localExecutionConfigChanged` heuristic
   // (backend/src/services/mcp-reinstall.ts).
@@ -449,7 +492,7 @@ export function McpCatalogForm({
     | Record<string, unknown>
     | undefined;
   const deploymentField = (key: string) =>
-    mode === "edit" && Boolean(localConfigDirty?.[key]);
+    mode === "edit" && isReallyDirty(localConfigDirty?.[key]);
   const isCommandDirty = deploymentField("command");
   const isArgumentsDirty = deploymentField("arguments");
   const isDockerImageDirty = deploymentField("dockerImage");
@@ -457,21 +500,9 @@ export function McpCatalogForm({
   const isHttpPortDirty = deploymentField("httpPort");
   const isHttpPathDirty = deploymentField("httpPath");
 
-  // True when any field that triggers `requiresNewUserInputForReinstall=true`
-  // on the backend is dirty. Saving with this true will flag every existing
-  // installation as requiring a manual reinstall.
-  const willRequireManualReinstall =
-    isNameDirty ||
-    isServerUrlDirty ||
-    isAuthDirty ||
-    isEnvDirty ||
-    isHeadersDirty ||
-    isCommandDirty ||
-    isArgumentsDirty ||
-    isDockerImageDirty ||
-    isTransportTypeDirty ||
-    isHttpPortDirty ||
-    isHttpPathDirty;
+  // The per-field `is*Dirty` flags below drive `ReinstallHint` badges
+  // next to individual inputs. The form-level cascade decision lives in
+  // `computeCascadeOutcome` (cascade-decision.ts).
   const areLabelsChanged = useMemo(() => {
     if (labels.length !== labelsBaseline.length) return true;
     return labels.some(
@@ -488,8 +519,36 @@ export function McpCatalogForm({
   const { data: isAdmin } = useHasPermissions({
     mcpServerInstallation: ["admin"],
   });
+  // Sharing to teams needs mcpRegistry:team-admin (admins bypass) plus team:read
+  // to populate the picker. Mirrors the agent/skill visibility gating.
+  const { data: isTeamAdmin } = useHasPermissions({
+    mcpRegistry: ["team-admin"],
+  });
+  const { data: canReadTeams } = useHasPermissions({ team: ["read"] });
   const { data: teams } = useTeams();
+  const { data: environmentList } = useEnvironments();
+  const environments = environmentList?.environments;
+  // Deploying to a restricted environment needs environment:deploy-to-restricted;
+  // environment:admin (full environment management) implies it.
+  const { data: hasEnvAdmin } = useHasPermissions({ environment: ["admin"] });
+  const { data: hasDeployToRestricted } = useHasPermissions({
+    environment: ["deploy-to-restricted"],
+  });
+  const canDeployRestricted =
+    (hasEnvAdmin ?? false) || (hasDeployToRestricted ?? false);
+  const defaultEnvironment = useDefaultEnvironment();
+  // Environments the user can deploy to. Restricted environments the user can't
+  // deploy to are hidden entirely. The default is always available.
+  const accessibleEnvironments = (environments ?? []).filter(
+    (e) => !e.restricted || canDeployRestricted,
+  );
+  const hasCustomEnvironmentOptions = accessibleEnvironments.length > 0;
+  const canManageEnvironments = hasEnvAdmin ?? false;
   const currentScope = form.watch("scope");
+  const canShareWithTeams = (isAdmin ?? false) || (isTeamAdmin ?? false);
+  // Shared items are one-way: an item that is already team/org-scoped cannot be
+  // demoted back to personal (mirrors the agent dialog).
+  const initialScope = initialValues?.scope;
   const enterpriseAuthDisabledReason: ReactNode | null =
     !isEnterpriseCoreEnabled
       ? "Available with the Enterprise Core license."
@@ -523,16 +582,20 @@ export function McpCatalogForm({
         label: "Personal",
         description: "Only you can access this MCP server.",
         icon: Lock,
+        disabled: initialScope != null && initialScope !== "personal",
+        disabledReason: "Shared MCP servers cannot be made personal.",
       },
       {
         value: "team",
         label: "Teams",
         description: "Share this MCP server with selected teams.",
         icon: Users,
-        disabled: !isAdmin || !teams?.length,
-        disabledReason: !isAdmin
-          ? "Only admins can assign MCP servers to teams."
-          : "Create a team first to share this MCP server.",
+        disabled: !canShareWithTeams || !canReadTeams || !teams?.length,
+        disabledReason: !canReadTeams
+          ? "Team sharing is unavailable without team:read permission."
+          : !canShareWithTeams
+            ? "You need mcpRegistry:team-admin permission to share with teams."
+            : "Create a team first to share this MCP server.",
       },
       {
         value: "org",
@@ -543,7 +606,7 @@ export function McpCatalogForm({
         disabledReason: "Only admins can make MCP servers organization-wide.",
       },
     ],
-    [isAdmin, teams],
+    [isAdmin, canShareWithTeams, canReadTeams, teams, initialScope],
   );
 
   // Check if BYOS feature is available (enterprise license)
@@ -584,6 +647,10 @@ export function McpCatalogForm({
     control: form.control,
     name: "additionalHeaders",
   });
+
+  const [headerDialog, setHeaderDialog] = useState<
+    { mode: "add" } | { mode: "edit"; index: number } | null
+  >(null);
 
   // Fetch available k8s docker-registry secrets for the "existing" dropdown
   const { data: k8sSecrets = [] } = useK8sImagePullSecrets();
@@ -637,8 +704,17 @@ export function McpCatalogForm({
     }
   }, [initialValues, localConfigSecret, form]);
 
-  const [pendingSubmit, setPendingSubmit] =
-    useState<McpCatalogFormValues | null>(null);
+  // The bar's mode is captured at submit-time so the bar stays consistent
+  // even if the form state drifts during the confirm step. `null` means
+  // no bar.
+  const [pendingSubmit, setPendingSubmit] = useState<{
+    values: McpCatalogFormValues;
+    mode: "manual" | "auto";
+  } | null>(null);
+  // `form.formState.isSubmitting` clears the moment `handleSubmit`
+  // returns (which we do early to show the bar), so it can't drive the
+  // bar's spinner — track the bar→save phase ourselves.
+  const [isConfirming, setIsConfirming] = useState(false);
 
   const performSubmit = async (values: McpCatalogFormValues) => {
     // Save any unsaved label before submitting
@@ -654,29 +730,59 @@ export function McpCatalogForm({
   };
 
   const handleSubmit = async (values: McpCatalogFormValues) => {
-    // In edit mode, if any change will trigger a reinstall on existing
-    // installations, surface a confirmation step so the admin understands the
-    // consequences before fan-out (single-tenant) or shared-pod restart
-    // (multitenant).
-    if (mode === "edit" && willRequireManualReinstall) {
-      setPendingSubmit(values);
-      return;
+    // Cascade-confirm decision delegated to a pure function so it can be
+    // matrix-tested without rendering, and so frontend + backend share
+    // the same decision tree shape. See `cascade-decision.ts`.
+    if (mode === "edit") {
+      const outcome = computeCascadeOutcome(
+        (initialValues ?? {}) as CascadeSnapshot,
+        transformFormToApiData(values) as CascadeSnapshot,
+        { affectedServerCount },
+      );
+      if (outcome !== "skip") {
+        setPendingSubmit({ values, mode: outcome });
+        return;
+      }
     }
     await performSubmit(values);
   };
 
   return (
-    <>
-      <Form {...form}>
-        <form
-          onSubmit={form.handleSubmit(handleSubmit)}
-          className="flex min-h-0 flex-1 flex-col"
-          autoComplete={MCP_CONFIG_AUTOCOMPLETE}
-          data-1p-ignore="true"
+    <Form {...form}>
+      <form
+        onSubmit={form.handleSubmit(handleSubmit)}
+        className="flex min-h-0 flex-1 flex-col"
+        autoComplete={MCP_CONFIG_AUTOCOMPLETE}
+        data-1p-ignore="true"
+      >
+        {/* Lock fields while the confirm bar is up AND during the save
+            itself — keeps the snapshot the bar describes in sync with
+            what the user sees on screen, and prevents silent data loss
+            when a mid-bar edit gets dropped on confirm (the save uses
+            `pendingSubmit.values`, the snapshot taken at first-save
+            time, not the current form state). Matches the same pattern
+            in `preset-editor-dialog.tsx`.
+
+            `disabled` covers native form controls (input/select/button)
+            but not the custom `<div role="button">` rows in the env-var
+            and header tables (they CAN'T be real <button>s because they
+            contain a nested delete <button>, and button-in-button is
+            invalid HTML — see comments in those table components).
+            `inert` blocks click + focus + keyboard for the entire
+            subtree, catching the row-as-div case. The `opacity-60`
+            class gives the user-visible "this is locked" signal that
+            `inert` alone doesn't provide. */}
+        <fieldset
+          disabled={pendingSubmit !== null || isConfirming}
+          inert={pendingSubmit !== null || isConfirming}
+          className={`flex min-h-0 min-w-0 flex-1 flex-col m-0 p-0 border-0 transition-opacity ${
+            pendingSubmit !== null || isConfirming ? "opacity-60" : ""
+          }`}
         >
           <div
             className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 ${embedded ? "space-y-6 pt-6 pb-0" : "space-y-6 py-6"}`}
           >
+            {notice}
             {catalogButton}
 
             <div className="space-y-4">
@@ -726,7 +832,6 @@ export function McpCatalogForm({
                   )}
                 />
               </div>
-
               <FormField
                 control={form.control}
                 name="description"
@@ -744,7 +849,6 @@ export function McpCatalogForm({
                   </FormItem>
                 )}
               />
-
               <FormField
                 control={form.control}
                 name="scope"
@@ -793,7 +897,82 @@ export function McpCatalogForm({
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name="environmentId"
+                render={({ field }) => {
+                  const environmentOptions = [
+                    {
+                      value: ENVIRONMENT_DEFAULT_VALUE,
+                      label: defaultEnvironment.name,
+                      description: defaultEnvironment.description ?? "",
+                    },
+                    ...accessibleEnvironments.map((environment) => ({
+                      value: environment.id,
+                      label: environment.name,
+                      description: environment.description ?? "",
+                    })),
+                  ];
+                  const selectedValue =
+                    field.value ?? ENVIRONMENT_DEFAULT_VALUE;
+                  const selectedDescription = environmentOptions.find(
+                    (option) => option.value === selectedValue,
+                  )?.description;
 
+                  return (
+                    <FormItem className="space-y-2">
+                      <Label>Environment</Label>
+                      <FormControl>
+                        <Select
+                          value={selectedValue}
+                          disabled={!hasCustomEnvironmentOptions}
+                          onValueChange={(value) =>
+                            field.onChange(
+                              value === ENVIRONMENT_DEFAULT_VALUE
+                                ? null
+                                : value,
+                            )
+                          }
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent position="popper">
+                            {environmentOptions.map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                                description={option.description || undefined}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </FormControl>
+                      {selectedDescription ? (
+                        <p className="text-xs text-muted-foreground">
+                          {selectedDescription}
+                        </p>
+                      ) : null}
+                      {!hasCustomEnvironmentOptions ? (
+                        <FormDescription>
+                          Only the default environment is available.{" "}
+                          {canManageEnvironments ? (
+                            <Link
+                              href="/settings/environments"
+                              className="underline underline-offset-2"
+                            >
+                              Manage environments
+                            </Link>
+                          ) : null}
+                        </FormDescription>
+                      ) : null}
+                      <FormMessage />
+                    </FormItem>
+                  );
+                }}
+              />
               {mode === "create" && (
                 <div className="space-y-2">
                   <Label>Server Type</Label>
@@ -856,7 +1035,6 @@ export function McpCatalogForm({
                   </div>
                 </div>
               )}
-
               {currentServerType === "local" && (
                 <div className="space-y-2">
                   <Label>Tenancy</Label>
@@ -1113,7 +1291,6 @@ export function McpCatalogForm({
             {currentServerType === "local" && (
               <div className="space-y-4">
                 <EnvironmentVariablesFormField
-                  control={form.control}
                   fields={fields}
                   append={append}
                   remove={remove}
@@ -1676,7 +1853,7 @@ export function McpCatalogForm({
                                   render={({ field }) => (
                                     <FormItem>
                                       <FormLabel>
-                                        Redirect URIs{" "}
+                                        MCP OAuth callback URIs{" "}
                                         <span className="text-destructive">
                                           *
                                         </span>
@@ -1689,7 +1866,39 @@ export function McpCatalogForm({
                                         />
                                       </FormControl>
                                       <FormDescription>
-                                        Comma-separated list of redirect URIs
+                                        Use {appName}'s MCP install callback,
+                                        usually{" "}
+                                        <code>
+                                          {typeof window !== "undefined"
+                                            ? `${window.location.origin}/oauth-callback`
+                                            : "https://app.example.com/oauth-callback"}
+                                        </code>
+                                        . Do not use the SSO callback URL under{" "}
+                                        <code>/api/auth/sso/callback</code>.
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <FormField
+                                  control={form.control}
+                                  name="oauthConfig.resource"
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>Protected Resource</FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          placeholder="https://api.example.com or api://client-id"
+                                          className="font-mono"
+                                          {...field}
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        Optional OAuth resource/audience sent in
+                                        the authorization request. Leave blank
+                                        to use the Default Audience, if set, or
+                                        the MCP endpoint URL.
                                       </FormDescription>
                                       <FormMessage />
                                     </FormItem>
@@ -2043,17 +2252,7 @@ export function McpCatalogForm({
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() =>
-                      appendAdditionalHeader({
-                        fieldName: undefined,
-                        headerName: "",
-                        promptOnInstallation: true,
-                        required: false,
-                        value: "",
-                        description: "",
-                        includeBearerPrefix: false,
-                      })
-                    }
+                    onClick={() => setHeaderDialog({ mode: "add" })}
                   >
                     <Plus className="h-4 w-4 mr-1" />
                     Add Header
@@ -2065,20 +2264,41 @@ export function McpCatalogForm({
                     No headers configured.
                   </div>
                 ) : (
-                  <InstallConfigFieldsTable
-                    control={form.control}
+                  // TODO(e2e): tests under platform/e2e-tests previously drove
+                  // the inline header inputs; after this refactor those
+                  // interactions live in HeaderDialog (click "Add Header" /
+                  // click a row first, then operate inside the modal).
+                  <HeadersReadOnlyTable
                     form={form}
                     fields={additionalHeaderFields}
-                    remove={removeAdditionalHeader}
                     fieldNamePrefix="additionalHeaders"
-                    keyFieldName="headerName"
-                    keyLabel="Header Name"
-                    keyPlaceholder="x-api-key"
-                    typeFieldName={null}
-                    valuePlaceholder="header value"
-                    bearerPrefixFieldName="includeBearerPrefix"
+                    onEdit={(index) => setHeaderDialog({ mode: "edit", index })}
+                    onDelete={(index) => removeAdditionalHeader(index)}
                   />
                 )}
+                <HeaderDialog
+                  open={headerDialog !== null}
+                  mode={headerDialog?.mode === "edit" ? "edit" : "add"}
+                  initial={
+                    headerDialog?.mode === "edit"
+                      ? readHeaderRowAsDraft(form, headerDialog.index)
+                      : null
+                  }
+                  existingHeaderNames={readOtherHeaderNames(
+                    form,
+                    additionalHeaderFields.length,
+                    headerDialog?.mode === "edit" ? headerDialog.index : null,
+                  )}
+                  onClose={() => setHeaderDialog(null)}
+                  onConfirm={(draft) => {
+                    if (headerDialog?.mode === "add") {
+                      appendAdditionalHeader(headerDraftToRow(draft));
+                    } else if (headerDialog?.mode === "edit") {
+                      applyHeaderDraftToRow(form, headerDialog.index, draft);
+                    }
+                    setHeaderDialog(null);
+                  }}
+                />
               </div>
             )}
 
@@ -2093,23 +2313,6 @@ export function McpCatalogForm({
                     </span>
                   )}
                 </div>
-                {advancedToolFeaturesEnabled && (
-                  <p className="text-sm text-muted-foreground">
-                    Organize servers and drive automatic tool assignment.
-                    {gatewayLabelsDocsUrl && (
-                      <>
-                        {" "}
-                        <ExternalDocsLink
-                          href={gatewayLabelsDocsUrl}
-                          className="underline"
-                          showIcon={false}
-                        >
-                          Learn more
-                        </ExternalDocsLink>
-                      </>
-                    )}
-                  </p>
-                )}
               </div>
               <div className="pt-4">
                 <ProfileLabels
@@ -2121,79 +2324,63 @@ export function McpCatalogForm({
               </div>
             </div>
           </div>
+        </fieldset>
 
-          {typeof footer === "function"
-            ? footer({
-                isDirty,
-                onReset: () => {
-                  form.reset();
-                  setLabels(labelsBaseline);
-                },
-              })
-            : footer}
-        </form>
-      </Form>
-      <ConfirmReinstallFanoutDialog
-        open={pendingSubmit !== null}
-        isMultitenant={isMultitenant}
-        onCancel={() => setPendingSubmit(null)}
-        onConfirm={async () => {
-          const values = pendingSubmit;
-          setPendingSubmit(null);
-          if (values) await performSubmit(values);
-        }}
-      />
-    </>
+        {pendingSubmit !== null ? (
+          <ReinstallConfirmBar
+            // Mode was captured at submit-time by `computeCascadeOutcome`;
+            // we honor that decision even if dirty state shifts while
+            // the bar is up (e.g., user tweaks labels mid-confirm).
+            mode={pendingSubmit.mode}
+            isMultitenant={isMultitenant}
+            affectedServerCount={affectedServerCount}
+            isSubmitting={isConfirming}
+            onCancel={() => setPendingSubmit(null)}
+            onConfirm={async () => {
+              // Keep `pendingSubmit` set during the await so the bar
+              // stays visible (spinner + disabled buttons) until the
+              // mutation completes.
+              setIsConfirming(true);
+              try {
+                await performSubmit(pendingSubmit.values);
+              } finally {
+                setIsConfirming(false);
+                setPendingSubmit(null);
+              }
+            }}
+          />
+        ) : typeof footer === "function" ? (
+          footer({
+            isDirty,
+            onReset: () => {
+              form.reset();
+              setLabels(labelsBaseline);
+            },
+          })
+        ) : (
+          footer
+        )}
+      </form>
+    </Form>
   );
 }
 
-function ConfirmReinstallFanoutDialog({
-  open,
-  isMultitenant,
-  onCancel,
-  onConfirm,
-}: {
-  open: boolean;
-  isMultitenant: boolean;
-  onCancel: () => void;
-  onConfirm: () => void | Promise<void>;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
-            {isMultitenant
-              ? "Shared deployment will be flagged for reinstall"
-              : "Existing installations will need to reinstall"}
-          </DialogTitle>
-        </DialogHeader>
-        <DialogBody className="text-sm">
-          {isMultitenant ? (
-            <p>
-              The shared deployment will keep running with its current config
-              until someone clicks <strong>Reinstall</strong> — expect a brief
-              restart then.
-            </p>
-          ) : (
-            <p>
-              Every existing install will be flagged for reinstall. Owners keep
-              running on their current config until they click{" "}
-              <strong>Reinstall</strong>. Nothing restarts automatically.
-            </p>
-          )}
-        </DialogBody>
-        <DialogStickyFooter>
-          <Button type="button" variant="outline" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button type="button" onClick={() => onConfirm()}>
-            Save and flag for reinstall
-          </Button>
-        </DialogStickyFooter>
-      </DialogContent>
-    </Dialog>
-  );
+/**
+ * Recursively check whether a `react-hook-form` dirtyFields branch
+ * actually has any dirty leaf. Necessary because RHF's dirty-tracking
+ * for arrays allocates an entry per index with per-leaf booleans even
+ * when nothing changed — so a `Boolean(dirtyFields.someArray)` check
+ * misfires on every form that has any non-empty array (e.g.,
+ * additionalHeaders, localConfig.environment).
+ */
+function isReallyDirty(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return false;
+  if (value === true) return true;
+  if (Array.isArray(value)) return value.some(isReallyDirty);
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(isReallyDirty);
+  }
+  return Boolean(value);
 }
 
 function ReinstallHint({ show }: { show: boolean }) {
@@ -2203,6 +2390,209 @@ function ReinstallHint({ show }: { show: boolean }) {
       requires reinstall
     </Badge>
   );
+}
+
+type PromptedEnvVarInfo = {
+  required: boolean;
+  type: string;
+  mounted: boolean;
+};
+
+/**
+ * Mirror of `promptedEnvVarsChanged` in
+ * `backend/src/services/mcp-reinstall.ts`. Returns true only when an env
+ * array change actually invalidates existing installs:
+ *
+ *   - Added OPTIONAL prompted var → existing installs stay valid (false)
+ *   - Added REQUIRED prompted var → existing installs missing required → true
+ *   - Removed prompted var        → stored value for removed var → true
+ *   - Type change                 → storage moved (e.g. plain ↔ secret) → true
+ *   - required false → true       → existing installs invalid → true
+ *   - required true → false       → existing installs still valid → false
+ *
+ * For NON-prompted env vars (the catalog-template ones whose values ARE
+ * part of the catalog), any change to value, key, type, or membership is
+ * a real catalog-spec change that the pod needs to pick up → true.
+ *
+ * Keep the two implementations in sync — they're the user-visible warning
+ * and the authoritative gate respectively. Mismatch is a silent UX bug.
+ */
+function envChangeRequiresReinstall(prev: unknown, next: unknown): boolean {
+  const prevArr = Array.isArray(prev) ? (prev as RawEnvVar[]) : [];
+  const nextArr = Array.isArray(next) ? (next as RawEnvVar[]) : [];
+
+  // Non-prompted vars: catalog-template, full value comparison.
+  const prevNonPrompted = nonPromptedSnapshot(prevArr);
+  const nextNonPrompted = nonPromptedSnapshot(nextArr);
+  if (JSON.stringify(prevNonPrompted) !== JSON.stringify(nextNonPrompted)) {
+    return true;
+  }
+
+  // Prompted vars: schema-evolution rules (see comment above).
+  const prevMap = promptedMap(prevArr);
+  const nextMap = promptedMap(nextArr);
+  for (const [key, prevVal] of prevMap) {
+    const nextVal = nextMap.get(key);
+    if (!nextVal) return true;
+    if (nextVal.type !== prevVal.type) return true;
+    if (!prevVal.required && nextVal.required) return true;
+    // Runtime layout change: `mounted` flips the pod spec between env
+    // var injection and a mounted secret file at `/secrets/<key>`.
+    // Mirror of backend `promptedEnvVarsRuntimeChanged` — without
+    // this, the badge stays hidden while the cascade bar still
+    // fires on save.
+    if (prevVal.mounted !== nextVal.mounted) return true;
+  }
+  for (const [key, nextVal] of nextMap) {
+    if (prevMap.has(key)) continue;
+    if (nextVal.required) return true;
+  }
+  return false;
+}
+
+type RawEnvVar = {
+  key?: string;
+  type?: string;
+  value?: unknown;
+  required?: boolean;
+  promptOnInstallation?: boolean;
+  sensitive?: boolean;
+  mounted?: boolean;
+};
+
+function promptedMap(arr: RawEnvVar[]): Map<string, PromptedEnvVarInfo> {
+  const m = new Map<string, PromptedEnvVarInfo>();
+  for (const v of arr) {
+    if (!v?.key || !v.promptOnInstallation) continue;
+    m.set(v.key, {
+      required: Boolean(v.required),
+      type: String(v.type ?? ""),
+      mounted: Boolean(v.mounted),
+    });
+  }
+  return m;
+}
+
+function nonPromptedSnapshot(arr: RawEnvVar[]): RawEnvVar[] {
+  // Sorted by key so a reorder isn't read as a change.
+  return arr
+    .filter((v) => v && !v.promptOnInstallation && v.key)
+    .map((v) => ({
+      key: v.key,
+      type: v.type,
+      value: v.value,
+      required: Boolean(v.required),
+      sensitive: Boolean(v.sensitive),
+    }))
+    .sort((a, b) => (a.key ?? "").localeCompare(b.key ?? ""));
+}
+
+type AdditionalHeader = {
+  fieldName?: string;
+  headerName?: string;
+  required?: boolean;
+  sensitive?: boolean;
+  value?: unknown;
+  description?: string;
+  includeBearerPrefix?: boolean;
+  promptOnInstallation?: boolean;
+};
+
+/**
+ * Reconstruct the form's `additionalHeaders` shape from a catalog's
+ * `userConfig`. Mirrors the equivalent transform in
+ * `mcp-catalog-form.utils.ts → transformCatalogItemToFormValues`. Used
+ * to produce a stable baseline for `additionalHeadersChangeRequiresReinstall`.
+ */
+function deriveAdditionalHeaders(userConfig: unknown): AdditionalHeader[] {
+  if (!userConfig || typeof userConfig !== "object") return [];
+  const out: AdditionalHeader[] = [];
+  for (const [fieldName, raw] of Object.entries(
+    userConfig as Record<string, unknown>,
+  )) {
+    if (fieldName === "access_token" || fieldName === "raw_access_token") {
+      continue;
+    }
+    if (!raw || typeof raw !== "object") continue;
+    const cfg = raw as Record<string, unknown>;
+    if (typeof cfg.headerName !== "string") continue;
+    out.push({
+      fieldName,
+      headerName: cfg.headerName,
+      required: Boolean(cfg.required),
+      sensitive: Boolean(cfg.sensitive),
+      value: typeof cfg.default === "string" ? cfg.default : undefined,
+      description: typeof cfg.description === "string" ? cfg.description : "",
+      includeBearerPrefix: cfg.valuePrefix === "Bearer ",
+      promptOnInstallation:
+        cfg.promptOnInstallation === undefined
+          ? true
+          : Boolean(cfg.promptOnInstallation),
+    });
+  }
+  return out;
+}
+
+/**
+ * Mirror of backend `userConfigChangedBreakingly`, scoped to header-
+ * mapped userConfig fields (the form's `additionalHeaders` projection).
+ * Returns true only when the change invalidates existing installs:
+ *
+ *   - Added OPTIONAL header  → existing installs stay valid (false)
+ *   - Added REQUIRED header  → existing installs are missing it → true
+ *   - Removed header         → stored value for removed field → true
+ *   - required false → true  → installs that didn't fill it → true
+ *   - required true → false  → installs still valid → false
+ *   - headerName change      → routing changes → true
+ *   - sensitive flag flip    → storage bucket moved → true
+ *   - STATIC header `value`  → that's the actual runtime header sent on
+ *     the wire (form writes it into `userConfig[field].default` when
+ *     promptOnInstallation is false). Change there → installs would
+ *     keep sending the old value → true
+ *
+ * Deliberately ignored:
+ *   - `value` on prompted headers (becomes `default` in userConfig) —
+ *     just a placeholder shown at install time, doesn't affect what's
+ *     actually sent
+ *   - `includeBearerPrefix` (becomes `valuePrefix: "Bearer "`) — cosmetic
+ *     wire-format detail; doesn't move storage
+ *   - `description`, `title` — pure metadata
+ *
+ * Keep in sync with `backend/src/services/mcp-reinstall.ts` — a
+ * mismatch silently disagrees with the cascade bar's behaviour and
+ * shows the user a misleading per-field hint badge.
+ */
+function additionalHeadersChangeRequiresReinstall(
+  prev: AdditionalHeader[],
+  next: unknown,
+): boolean {
+  const nextArr = Array.isArray(next) ? (next as AdditionalHeader[]) : [];
+  const prevMap = new Map(
+    prev.filter((h) => h.fieldName).map((h) => [h.fieldName as string, h]),
+  );
+  const nextMap = new Map(
+    nextArr.filter((h) => h.fieldName).map((h) => [h.fieldName as string, h]),
+  );
+  for (const [key, p] of prevMap) {
+    const n = nextMap.get(key);
+    if (!n) return true; // Removed
+    if (!p.required && Boolean(n.required)) return true; // Became required
+    if ((p.headerName ?? "") !== (n.headerName ?? "")) return true; // Routing
+    if (Boolean(p.sensitive) !== Boolean(n.sensitive)) return true; // Storage
+    // Static header value rotation. `value` only matters at runtime
+    // when the header is fully static (no install prompt) — for prompted
+    // headers it's just a placeholder.
+    const wasStatic = !p.promptOnInstallation;
+    const isStatic = !n.promptOnInstallation;
+    if (wasStatic && isStatic && (p.value ?? "") !== (n.value ?? "")) {
+      return true;
+    }
+  }
+  for (const [key, n] of nextMap) {
+    if (prevMap.has(key)) continue;
+    if (n.required) return true; // Added required
+  }
+  return false;
 }
 
 function EnterpriseIdentityProviderField(params: {
@@ -2308,4 +2698,71 @@ function AuthMethodCard(params: {
       </div>
     </button>
   );
+}
+
+function readHeaderRowAsDraft(
+  form: UseFormReturn<McpCatalogFormValues>,
+  index: number,
+): HeaderDraft {
+  const row = form.getValues(`additionalHeaders.${index}`);
+  const promptOnInstallation = Boolean(row?.promptOnInstallation);
+  return {
+    headerName: row?.headerName ?? "",
+    scope: promptOnInstallation ? "installation" : "static",
+    required: Boolean(row?.required),
+    value: row?.value ?? "",
+    description: row?.description ?? "",
+    includeBearerPrefix: Boolean(row?.includeBearerPrefix),
+    sensitive: Boolean(row?.sensitive),
+  };
+}
+
+function readOtherHeaderNames(
+  form: UseFormReturn<McpCatalogFormValues>,
+  length: number,
+  excludeIndex: number | null,
+): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < length; i++) {
+    if (i === excludeIndex) continue;
+    const name = form.getValues(`additionalHeaders.${i}.headerName`);
+    if (name?.trim()) out.push(name.trim());
+  }
+  return out;
+}
+
+function headerDraftToRow(draft: HeaderDraft) {
+  return {
+    fieldName: undefined,
+    headerName: draft.headerName,
+    promptOnInstallation: draft.scope === "installation",
+    required: draft.scope === "installation" ? draft.required : false,
+    value: draft.scope === "static" ? draft.value : "",
+    description: draft.description,
+    includeBearerPrefix: draft.includeBearerPrefix,
+    // Static fields can't be sensitive (server rejects the combination);
+    // force false even if the draft somehow carries it (defense in depth).
+    sensitive: draft.scope === "static" ? false : draft.sensitive,
+  };
+}
+
+function applyHeaderDraftToRow(
+  form: UseFormReturn<McpCatalogFormValues>,
+  index: number,
+  draft: HeaderDraft,
+) {
+  const set = (name: string, value: unknown) =>
+    form.setValue(
+      // biome-ignore lint/suspicious/noExplicitAny: dynamic field path
+      `additionalHeaders.${index}.${name}` as any,
+      value,
+      { shouldDirty: true },
+    );
+  set("headerName", draft.headerName);
+  set("promptOnInstallation", draft.scope === "installation");
+  set("required", draft.scope === "installation" ? draft.required : false);
+  set("value", draft.scope === "static" ? draft.value : "");
+  set("description", draft.description);
+  set("includeBearerPrefix", draft.includeBearerPrefix);
+  set("sensitive", draft.scope === "static" ? false : draft.sensitive);
 }

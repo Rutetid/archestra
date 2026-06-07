@@ -6,7 +6,7 @@ import {
   MAX_DOMAIN_LENGTH,
   MAX_PASSTHROUGH_HEADERS,
   MAX_SUGGESTED_PROMPTS,
-} from "@shared";
+} from "@archestra/shared";
 import {
   createInsertSchema,
   createSelectSchema,
@@ -43,14 +43,6 @@ export type AgentScope = ResourceVisibilityScope;
 export const ToolExposureModeSchema = z.enum(["full", "search_and_run_only"]);
 export type ToolExposureMode = z.infer<typeof ToolExposureModeSchema>;
 
-/**
- * Tool assignment mode:
- * - automatic: Tools are automatically assigned based label selectors
- * - manual: Tools must be manually assigned by the user
- */
-export const ToolAssignmentModeSchema = z.enum(["automatic", "manual"]);
-export type ToolAssignmentMode = z.infer<typeof ToolAssignmentModeSchema>;
-
 export const AgentScopeFilterSchema = z.enum([
   "personal",
   "team",
@@ -75,11 +67,21 @@ const DualLlmQuarantineAgentConfigSchema = z.object({
   name: z.literal(BUILT_IN_AGENT_IDS.DUAL_LLM_QUARANTINE),
 });
 
+const ContextCompactionAgentConfigSchema = z.object({
+  name: z.literal(BUILT_IN_AGENT_IDS.CONTEXT_COMPACTION),
+});
+
+const ChatTitleGenerationAgentConfigSchema = z.object({
+  name: z.literal(BUILT_IN_AGENT_IDS.CHAT_TITLE_GENERATION),
+});
+
 // Discriminated union — add future built-in agents here
 export const BuiltInAgentConfigSchema = z.discriminatedUnion("name", [
   PolicyConfigAgentConfigSchema,
   DualLlmMainAgentConfigSchema,
   DualLlmQuarantineAgentConfigSchema,
+  ContextCompactionAgentConfigSchema,
+  ChatTitleGenerationAgentConfigSchema,
 ]);
 
 export type BuiltInAgentConfig = z.infer<typeof BuiltInAgentConfigSchema>;
@@ -91,6 +93,12 @@ export type DualLlmMainAgentConfig = z.infer<
 >;
 export type DualLlmQuarantineAgentConfig = z.infer<
   typeof DualLlmQuarantineAgentConfigSchema
+>;
+export type ContextCompactionAgentConfig = z.infer<
+  typeof ContextCompactionAgentConfigSchema
+>;
+export type ChatTitleGenerationAgentConfig = z.infer<
+  typeof ChatTitleGenerationAgentConfigSchema
 >;
 
 // Team info schema for agent responses (just id and name)
@@ -125,7 +133,6 @@ const selectExtendedFields = {
   incomingEmailSecurityMode: IncomingEmailSecurityModeSchema,
   agentType: AgentTypeSchema,
   scope: AgentScopeSchema,
-  toolAssignmentMode: ToolAssignmentModeSchema,
   toolExposureMode: ToolExposureModeSchema,
   builtInAgentConfig: BuiltInAgentConfigSchema.nullable(),
   passthroughHeaders: z.array(z.string()).nullable(),
@@ -135,7 +142,6 @@ const insertExtendedFields = {
   incomingEmailSecurityMode: IncomingEmailSecurityModeSchema.optional(),
   agentType: AgentTypeSchema.optional(),
   scope: AgentScopeSchema.optional(),
-  toolAssignmentMode: ToolAssignmentModeSchema.optional(),
   toolExposureMode: ToolExposureModeSchema.optional(),
   builtInAgentConfig: BuiltInAgentConfigSchema.nullable().optional(),
   passthroughHeaders: PassthroughHeadersSchema,
@@ -199,6 +205,7 @@ export const SelectAgentSchema = createSelectSchema(
   teams: z.array(AgentTeamInfoSchema),
   labels: z.array(AgentLabelWithDetailsSchema),
   authorName: z.string().nullable().optional(),
+  authorEmail: z.string().nullable().optional(),
   knowledgeBaseIds: z.array(z.string()),
   connectorIds: z.array(z.string()),
   suggestedPrompts: z
@@ -286,13 +293,15 @@ export const PolicyConfigSchema = z.object({
     .enum([
       "allow_when_context_is_sensitive",
       "block_when_context_is_sensitive",
+      "require_approval",
       "block_always",
     ])
     .describe(
       "When should this tool be allowed to be invoked? " +
         "'allow_when_context_is_sensitive' - Allow invocation even when sensitive data is present (safe read-only tools). " +
         "'block_when_context_is_sensitive' - Allow only when context is safe, block when sensitive data is present (tools that could leak data). " +
-        "'block_always' - Never allow automatic invocation (dangerous tools that execute code, write data, or send data externally).",
+        "'require_approval' - Require user confirmation before executing in chat; block in autonomous sessions (write/mutating tools that are not outright destructive: create/update/send/post/charge). " +
+        "'block_always' - Never allow automatic invocation (obviously destructive tools whose name is solely dedicated to deleting or destroying data).",
     ),
   trustedDataAction: z
     .enum([
@@ -322,10 +331,12 @@ const TOOL_INVOCATION_ACTION_MAP: Record<
   PolicyConfig["toolInvocationAction"],
   | "allow_when_context_is_untrusted"
   | "block_when_context_is_untrusted"
+  | "require_approval"
   | "block_always"
 > = {
   allow_when_context_is_sensitive: "allow_when_context_is_untrusted",
   block_when_context_is_sensitive: "block_when_context_is_untrusted",
+  require_approval: "require_approval",
   block_always: "block_always",
 };
 

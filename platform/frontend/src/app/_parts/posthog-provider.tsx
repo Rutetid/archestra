@@ -2,8 +2,8 @@
 
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
-import { useEffect, useRef } from "react";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useCallback, useEffect, useRef } from "react";
+import { useSession } from "@/lib/auth/auth.query";
 import config from "@/lib/config/config";
 import { usePublicConfig } from "@/lib/config/config.query";
 
@@ -12,16 +12,24 @@ export function PostHogProviderWrapper({
 }: {
   children: React.ReactNode;
 }) {
-  const { data: session, isPending: isSessionPending } =
-    authClient.useSession();
+  const { data: session, isPending: isSessionPending } = useSession();
   const { data: publicConfig, isLoading: isPublicConfigLoading } =
     usePublicConfig();
   const hasIdentifiedUserRef = useRef(false);
   const isPostHogInitializedRef = useRef(false);
+  const lastRegisteredInstanceIdRef = useRef<string | null>(null);
   const lastIdentifiedUserIdRef = useRef<string | null>(null);
   const userId = session?.user?.id;
   const userEmail = session?.user?.email;
   const userName = session?.user?.name;
+
+  const registerInstance = useCallback((instanceId: string) => {
+    posthog.register({
+      instance_id: instanceId,
+    });
+    posthog.group("instance", instanceId);
+    lastRegisteredInstanceIdRef.current = instanceId;
+  }, []);
 
   useEffect(() => {
     const analytics = publicConfig?.analytics;
@@ -38,7 +46,16 @@ export function PostHogProviderWrapper({
       });
       isPostHogInitializedRef.current = true;
     }
-  }, [isPublicConfigLoading, publicConfig]);
+
+    if (
+      analytics?.enabled &&
+      analytics.instanceId &&
+      isPostHogInitializedRef.current &&
+      analytics.instanceId !== lastRegisteredInstanceIdRef.current
+    ) {
+      registerInstance(analytics.instanceId);
+    }
+  }, [isPublicConfigLoading, publicConfig, registerInstance]);
 
   useEffect(() => {
     const analyticsEnabled = publicConfig?.analytics?.enabled;
@@ -63,11 +80,22 @@ export function PostHogProviderWrapper({
     }
 
     if (hasIdentifiedUserRef.current) {
+      const instanceId = publicConfig?.analytics?.instanceId;
       posthog.reset();
+      if (instanceId) {
+        registerInstance(instanceId);
+      }
       hasIdentifiedUserRef.current = false;
       lastIdentifiedUserIdRef.current = null;
     }
-  }, [isSessionPending, publicConfig, userEmail, userId, userName]);
+  }, [
+    isSessionPending,
+    publicConfig,
+    registerInstance,
+    userEmail,
+    userId,
+    userName,
+  ]);
 
   return <PostHogProvider client={posthog}>{children}</PostHogProvider>;
 }

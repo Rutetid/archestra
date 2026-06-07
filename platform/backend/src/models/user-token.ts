@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { ARCHESTRA_TOKEN_PREFIX } from "@shared";
+import { ARCHESTRA_TOKEN_PREFIX } from "@archestra/shared";
 import { and, eq } from "drizzle-orm";
 import db, { schema } from "@/database";
 import logger from "@/logging";
@@ -263,6 +263,34 @@ class UserTokenModel {
 
     const { token } = await UserTokenModel.create(userId, organizationId);
     return token;
+  }
+
+  static async findByIdForAudit(
+    id: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const [row] = await db
+      .select()
+      .from(schema.userTokensTable)
+      .where(
+        and(
+          eq(schema.userTokensTable.id, id),
+          eq(schema.userTokensTable.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      userId: row.userId,
+      organizationId: row.organizationId,
+      name: row.name,
+      tokenStart: row.tokenStart,
+      createdAt: row.createdAt.toISOString(),
+      lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
+    };
   }
 }
 

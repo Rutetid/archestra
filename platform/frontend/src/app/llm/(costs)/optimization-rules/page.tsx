@@ -1,6 +1,6 @@
 "use client";
 
-import { providerDisplayNames } from "@shared";
+import { providerDisplayNames } from "@archestra/shared";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Edit, Plus, Power, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -9,7 +9,7 @@ import { OptimizationRuleForm } from "@/app/llm/(costs)/optimization-rules/_part
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { FormDialog } from "@/components/form-dialog";
 import { LlmModelSearchableSelect } from "@/components/llm-model-select";
-import { LlmProviderOptionLabel } from "@/components/llm-provider-options";
+import { LlmProviderOptionLabel } from "@/components/llm-provider-select-items";
 import { LoadingSpinner, LoadingWrapper } from "@/components/loading";
 import { TableRowActions } from "@/components/table-row-actions";
 import { Badge } from "@/components/ui/badge";

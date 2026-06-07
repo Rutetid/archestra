@@ -3,9 +3,9 @@ import {
   ARCHESTRA_TOKEN_PREFIX,
   type PaginationQuery,
   type SupportedProvider,
-} from "@shared";
+} from "@archestra/shared";
 import { and, count, eq, ilike, inArray, sql } from "drizzle-orm";
-import db, { schema } from "@/database";
+import db, { schema, withDbTransaction } from "@/database";
 import type { PaginatedResult } from "@/database/utils/pagination";
 import { createPaginatedResult } from "@/database/utils/pagination";
 import logger from "@/logging";
@@ -15,6 +15,7 @@ import type {
   SelectVirtualApiKey,
   VirtualApiKeyWithParentInfo,
 } from "@/types";
+import { escapeLikePattern } from "@/utils/sql-search";
 
 /** Length of random part (32 bytes = 64 hex chars = 256 bits of entropy) */
 const TOKEN_RANDOM_LENGTH = 32;
@@ -94,7 +95,7 @@ class VirtualApiKeyModel {
       FORCE_DB,
     );
 
-    const virtualKey = await db.transaction(async (tx) => {
+    const virtualKey = await withDbTransaction(async (tx) => {
       const [createdVirtualKey] = await tx
         .insert(schema.virtualApiKeysTable)
         .values({
@@ -160,7 +161,7 @@ class VirtualApiKeyModel {
     const { id, name, expiresAt, scope, authorId, teamIds, providerApiKeys } =
       params;
 
-    const updatedVirtualKey = await db.transaction(async (tx) => {
+    const updatedVirtualKey = await withDbTransaction(async (tx) => {
       const [updated] = await tx
         .update(schema.virtualApiKeysTable)
         .set({
@@ -393,7 +394,7 @@ class VirtualApiKeyModel {
       providerApiKeyId,
     });
 
-    if (!isAdmin && accessibleIds.length === 0) {
+    if ((!isAdmin || providerApiKeyId) && accessibleIds.length === 0) {
       return createPaginatedResult([], 0, pagination);
     }
 
@@ -401,7 +402,7 @@ class VirtualApiKeyModel {
       eq(schema.virtualApiKeysTable.organizationId, organizationId),
     ];
 
-    if (!isAdmin) {
+    if (!isAdmin || providerApiKeyId) {
       whereConditions.push(
         inArray(schema.virtualApiKeysTable.id, accessibleIds),
       );
@@ -521,7 +522,9 @@ class VirtualApiKeyModel {
           schema.virtualApiKeyProviderApiKeysTable.providerApiKeyId,
         providerApiKeyName: schema.llmProviderApiKeysTable.name,
         secretId: schema.llmProviderApiKeysTable.secretId,
-        baseUrl: schema.llmProviderApiKeysTable.baseUrl,
+        baseUrl: sql<
+          string | null
+        >`coalesce(${schema.llmProviderApiKeysTable.inferenceBaseUrl}, ${schema.llmProviderApiKeysTable.baseUrl})`,
       })
       .from(schema.virtualApiKeyProviderApiKeysTable)
       .innerJoin(
@@ -608,6 +611,28 @@ class VirtualApiKeyModel {
       );
 
     return rows.map((row) => row.teamId);
+  }
+
+  static async findByIdForAudit(
+    id: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const row = await VirtualApiKeyModel.findById(id);
+    if (!row || row.organizationId !== organizationId) return null;
+
+    const teamIds = await VirtualApiKeyModel.getTeamIdsForVirtualApiKey(id);
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      scope: row.scope,
+      authorId: row.authorId,
+      teamIds: [...teamIds].sort(),
+      tokenStart: row.tokenStart,
+      expiresAt: row.expiresAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+    };
   }
 
   static async getVisibilityForVirtualApiKeyIds(
@@ -764,10 +789,6 @@ class VirtualApiKeyModel {
       authorName: authorNameByVirtualApiKeyId,
     };
   }
-}
-
-function escapeLikePattern(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
 }
 
 export default VirtualApiKeyModel;

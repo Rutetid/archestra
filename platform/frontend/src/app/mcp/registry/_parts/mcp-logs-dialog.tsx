@@ -8,7 +8,7 @@ import {
   type McpLogsErrorMessage,
   type McpLogsMessage,
   type ResourceVisibilityScope,
-} from "@shared";
+} from "@archestra/shared";
 import {
   ArrowDown,
   Check,
@@ -163,22 +163,22 @@ export function McpLogsContent({
   // State for selected installation
   const [serverId, setServerId] = useState<string | null>(null);
 
-  // Reset when dialog closes so the next open picks up a fresh initialServerId
+  // Reset when dialog closes so the next open picks up a fresh initialServerId.
   useEffect(() => {
     if (!isActive) {
       setServerId(null);
     }
   }, [isActive]);
 
-  // Default to initialServerId or first installation when dialog opens
+  // Default to initialServerId or first installation when dialog opens.
   useEffect(() => {
-    if (isActive && installs.length > 0 && !serverId) {
-      const initial =
-        initialServerId && installs.some((i) => i.id === initialServerId)
-          ? initialServerId
-          : installs[0].id;
-      setServerId(initial);
-    }
+    if (!isActive || installs.length === 0) return;
+    if (serverId && installs.some((i) => i.id === serverId)) return;
+    const initial =
+      initialServerId && installs.some((i) => i.id === initialServerId)
+        ? initialServerId
+        : installs[0].id;
+    setServerId(initial);
   }, [isActive, installs, serverId, initialServerId]);
 
   const currentDeploymentStatus = serverId
@@ -438,8 +438,8 @@ export function McpLogsContent({
     <>
       {!hideHeader && (
         <DialogHeader className="flex-shrink-0">
-          <div className="min-w-0">
-            <DialogTitle className="flex items-center gap-2 overflow-hidden">
+          <div className="flex items-center gap-2 min-w-0">
+            <DialogTitle className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
               <Terminal className="h-5 w-5 flex-shrink-0" />
               <span className="truncate">{serverName}</span>
             </DialogTitle>
@@ -763,9 +763,11 @@ function InstanceSelector({
         <div className="flex items-center gap-3 min-w-0 flex-1 pl-4 pr-3 py-3">
           <DeploymentStatusDot state={dotState} />
           <div className="flex flex-col min-w-0">
-            <span className="font-mono text-sm font-medium truncate leading-tight">
-              {selected?.name ?? "—"}
-            </span>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-mono text-sm font-medium truncate leading-tight">
+                {selected?.name ?? "—"}
+              </span>
+            </div>
             {stateLabel && (
               <span
                 className={`text-[10px] tracking-[0.08em] leading-tight mt-0.5 ${
@@ -896,9 +898,11 @@ function InstanceSelector({
                 >
                   <DeploymentStatusDot state={d} />
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-mono text-xs font-medium truncate">
-                      {install.name}
-                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-xs font-medium truncate">
+                        {install.name}
+                      </span>
+                    </div>
                     {(io || age) && (
                       <span className="text-[10px] text-muted-foreground truncate">
                         {[io, age].filter(Boolean).join(" · ")}

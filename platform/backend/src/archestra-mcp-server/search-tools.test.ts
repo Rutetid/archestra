@@ -1,5 +1,8 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: test assertions inspect tool payloads dynamically
-import { TOOL_RUN_TOOL_FULL_NAME, TOOL_SEARCH_TOOLS_FULL_NAME } from "@shared";
+import {
+  TOOL_RUN_TOOL_FULL_NAME,
+  TOOL_SEARCH_TOOLS_FULL_NAME,
+} from "@archestra/shared";
 import { describe, expect, test } from "@/test";
 import type { ArchestraContext } from ".";
 import { executeArchestraTool } from ".";
@@ -140,6 +143,9 @@ describe("search_tools", () => {
       userId: user.id,
     };
 
+    // "trusted data policy" matches only policy tools (trusted-data /
+    // tool-invocation / autonomy), all of which require permissions this
+    // agent:read role lacks, so RBAC filters them all out before ranking.
     const result = await executeArchestraTool(
       TOOL_SEARCH_TOOLS_FULL_NAME,
       { query: "trusted data policy", limit: 10 },

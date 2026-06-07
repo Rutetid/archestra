@@ -1,6 +1,6 @@
 "use client";
 
-import { isAgentTool, PLAYWRIGHT_MCP_CATALOG_ID } from "@shared";
+import { isAgentTool, PLAYWRIGHT_MCP_CATALOG_ID } from "@archestra/shared";
 import { useQueries } from "@tanstack/react-query";
 import { Globe, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAgentDelegations } from "@/lib/agent-tools.query";
+import { useSession } from "@/lib/auth/auth.query";
 import {
   fetchAgentMcpTools,
   useConversationEnabledTools,
@@ -26,7 +27,6 @@ import {
   getPendingActions,
   PENDING_TOOL_STATE_CHANGE_EVENT,
 } from "@/lib/chat/pending-tool-state";
-import { authClient } from "@/lib/clients/auth/auth-client";
 import { useMcpServers } from "@/lib/mcp/mcp-server.query";
 import { cn } from "@/lib/utils";
 
@@ -62,7 +62,7 @@ export function usePlaywrightSetupRequired(
     catalogId: PLAYWRIGHT_MCP_CATALOG_ID,
     enabled: options?.enabled,
   });
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const isPlaywrightInstalledByCurrentUser = playwrightServers.some(
     (s) => s.ownerId === session?.user?.id,
   );

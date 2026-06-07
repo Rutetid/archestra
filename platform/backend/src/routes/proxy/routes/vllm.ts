@@ -4,8 +4,9 @@
  * vLLM exposes an OpenAI-compatible API, so these routes mirror the OpenAI routes.
  * See: https://docs.vllm.ai/en/latest/features/openai_api.html
  */
+
+import { RouteId } from "@archestra/shared";
 import fastifyHttpProxy from "@fastify/http-proxy";
-import { RouteId } from "@shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import config from "@/config";
@@ -58,15 +59,6 @@ const vllmProxyRoutes: FastifyPluginAsyncZod = async (fastify) => {
       },
     },
     async (request, reply) => {
-      if (!config.llm.vllm.enabled) {
-        return reply.status(500).send({
-          error: {
-            message:
-              "vLLM provider is not configured. Set ARCHESTRA_VLLM_BASE_URL to enable.",
-            type: "api_internal_server_error",
-          },
-        });
-      }
       logger.debug(
         { url: request.url },
         "[UnifiedProxy] Handling vLLM request (default agent)",
@@ -94,15 +86,6 @@ const vllmProxyRoutes: FastifyPluginAsyncZod = async (fastify) => {
       },
     },
     async (request, reply) => {
-      if (!config.llm.vllm.enabled) {
-        return reply.status(500).send({
-          error: {
-            message:
-              "vLLM provider is not configured. Set ARCHESTRA_VLLM_BASE_URL to enable.",
-            type: "api_internal_server_error",
-          },
-        });
-      }
       logger.debug(
         { url: request.url, agentId: request.params.agentId },
         "[UnifiedProxy] Handling vLLM request (with agent)",

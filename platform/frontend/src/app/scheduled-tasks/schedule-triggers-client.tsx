@@ -1,7 +1,5 @@
 "use client";
 
-import { archestraApiSdk } from "@shared";
-import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Cron } from "croner";
 import {
@@ -38,7 +36,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MultiSelect } from "@/components/ui/multi-select";
 import { PermissionButton } from "@/components/ui/permission-button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
@@ -55,6 +52,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { UserSearchableMultiSelect } from "@/components/user-searchable-multi-select";
 import { useProfiles } from "@/lib/agent.query";
 import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { useOrganizationMembers } from "@/lib/organization.query";
@@ -73,15 +71,20 @@ import {
   useScheduleTriggers,
   useUpdateScheduleTrigger,
 } from "@/lib/schedule-trigger.query";
+import { useTeams } from "@/lib/teams/team.query";
 import { cn } from "@/lib/utils";
 import { formatRelativeTimeFromNow } from "@/lib/utils/date-time";
 import { formatCronSchedule } from "@/lib/utils/format-cron";
 import {
   type AgentOption,
+  buildCronFromSchedule,
   buildScheduleTriggerPayload,
   DEFAULT_FORM_STATE,
   getActiveMutationVariable,
   getRunNowTrackingState,
+  isValidCronExpression,
+  parseCronToMode,
+  type ScheduleMode,
   type ScheduleTriggerFormState,
 } from "./schedule-trigger.utils";
 
@@ -105,13 +108,14 @@ export function ScheduleTriggersIndexPage() {
   const { data: members } = useOrganizationMembers(
     isScheduledTaskAdmin && showOtherUsers,
   );
-  const memberItems = useMemo(
+  const userOptions = useMemo(
     () =>
       (members ?? [])
         .filter((m) => m.id !== currentUserId)
         .map((m) => ({
-          value: m.id,
-          label: m.name || m.email,
+          userId: m.id,
+          name: m.name,
+          email: m.email,
         })),
     [members, currentUserId],
   );
@@ -446,13 +450,13 @@ export function ScheduleTriggersIndexPage() {
           </Select>
         )}
         {isScheduledTaskAdmin && showOtherUsers && (
-          <MultiSelect
+          <UserSearchableMultiSelect
             value={selectedAuthorIds}
             onValueChange={(ids) => {
               setSelectedAuthorIds(ids);
               setPageIndex(0);
             }}
-            items={memberItems}
+            users={userOptions}
             placeholder="All users"
             className="w-[220px]"
             showSelectedBadges={false}
@@ -577,15 +581,7 @@ export function ScheduleTriggerDetailPage({
   const { data: isAgentTeamAdmin = false } = useHasPermissions({
     agent: ["team-admin"],
   });
-  const { data: userTeams = [] } = useQuery({
-    queryKey: ["teams"],
-    queryFn: async () => {
-      const response = await archestraApiSdk.getTeams({
-        query: { limit: 100, offset: 0 },
-      });
-      return response.data?.data ?? [];
-    },
-  });
+  const { data: userTeams = [] } = useTeams();
   const userTeamIdSet = useMemo(
     () => new Set(userTeams.map((t) => t.id)),
     [userTeams],
@@ -1092,8 +1088,6 @@ function ScheduleTriggerCreateButton({
   );
 }
 
-type ScheduleMode = "hourly" | "daily";
-
 const WEEKDAYS = [
   { label: "Mon", value: 1 },
   { label: "Tue", value: 2 },
@@ -1108,74 +1102,6 @@ const HOURS = Array.from({ length: 24 }, (_, i) => ({
   value: String(i),
   label: `${String(i).padStart(2, "0")}:00`,
 }));
-
-function parseCronToMode(cron: string): {
-  mode: ScheduleMode;
-  hour: string;
-  minute: string;
-  days: number[];
-} {
-  const parts = cron.trim().split(/\s+/);
-  const defaults = {
-    hour: "9",
-    minute: "0",
-    days: [1, 2, 3, 4, 5],
-  };
-
-  if (parts.length !== 5) {
-    return { mode: "daily", ...defaults };
-  }
-
-  const [min, hr, , , dow] = parts;
-
-  // Hourly: "0 * * * *" or "N * * * *"
-  if (hr === "*" && dow === "*") {
-    return { mode: "hourly", ...defaults };
-  }
-
-  // Daily: specific hour, days pattern
-  if (hr !== "*" && !hr.includes("/")) {
-    const dayList =
-      dow === "*"
-        ? [0, 1, 2, 3, 4, 5, 6]
-        : dow.split(",").flatMap((part) => {
-            if (part.includes("-")) {
-              const [start, end] = part.split("-").map(Number);
-              const result: number[] = [];
-              for (let i = start; i <= end; i++) result.push(i);
-              return result;
-            }
-            return [Number(part)];
-          });
-
-    return {
-      mode: "daily",
-      hour: hr,
-      minute: min,
-      days: dayList,
-    };
-  }
-
-  return { mode: "daily", ...defaults };
-}
-
-function buildCronFromSchedule(
-  mode: ScheduleMode,
-  hour: string,
-  minute: string,
-  days: number[],
-): string {
-  switch (mode) {
-    case "hourly":
-      return `${minute} * * * *`;
-    case "daily": {
-      const sorted = [...days].sort((a, b) => a - b);
-      const dowPart =
-        sorted.length === 7 || sorted.length === 0 ? "*" : sorted.join(",");
-      return `${minute} ${hour} * * ${dowPart}`;
-    }
-  }
-}
 
 function ScheduleSection({
   cronExpression,
@@ -1199,6 +1125,10 @@ function ScheduleSection({
       newMinute: string,
       newDays: number[],
     ) => {
+      // In custom mode the raw input drives cronExpression directly; presets do not.
+      if (newMode === "custom") {
+        return;
+      }
       onCronExpressionChange(
         buildCronFromSchedule(newMode, newHour, newMinute, newDays),
       );
@@ -1230,7 +1160,7 @@ function ScheduleSection({
       <Label>Schedule</Label>
 
       <div className="flex gap-1 rounded-md border p-1">
-        {(["hourly", "daily"] as const).map((m) => (
+        {(["hourly", "daily", "custom"] as const).map((m) => (
           <button
             key={m}
             type="button"
@@ -1280,6 +1210,37 @@ function ScheduleSection({
               ))}
             </SelectContent>
           </Select>
+        </div>
+      )}
+
+      {mode === "custom" && (
+        <div className="space-y-2">
+          <Label htmlFor="dialog-cron">Cron expression</Label>
+          <Input
+            id="dialog-cron"
+            value={cronExpression}
+            onChange={(event) => onCronExpressionChange(event.target.value)}
+            placeholder="0 9 * * 1-5"
+            className={cn(
+              "font-mono",
+              cronExpression.trim() &&
+                !isValidCronExpression(cronExpression) &&
+                "border-destructive focus-visible:ring-destructive",
+            )}
+          />
+          {!cronExpression.trim() ? (
+            <p className="text-xs text-muted-foreground">
+              Standard 5-field cron: minute hour day month weekday
+            </p>
+          ) : isValidCronExpression(cronExpression) ? (
+            <p className="text-xs text-muted-foreground">
+              {formatCronSchedule(cronExpression)}
+            </p>
+          ) : (
+            <p className="text-xs text-destructive">
+              Not a valid cron expression
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -1,6 +1,5 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import {
   type Action,
   type Permissions,
@@ -8,7 +7,8 @@ import {
   resourceCategories,
   resourceDescriptions,
   resourceLabels,
-} from "@shared";
+} from "@archestra/shared";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Check,
   ChevronDown,
@@ -39,8 +39,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useUpdateAccountNameMutation } from "@/lib/auth/account.query";
-import { useAllPermissions } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useAllPermissions, useSession } from "@/lib/auth/auth.query";
 import {
   useActiveMemberRole,
   useActiveOrganization,
@@ -62,10 +61,12 @@ const actionLabels: Record<Action, string> = {
   cancel: "Cancel",
   enable: "Enable",
   query: "Query",
+  execute: "Execute",
+  "deploy-to-restricted": "Deploy to Restricted",
 };
 
 export function RolePermissionsCard() {
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const { data: activeOrg } = useActiveOrganization();
   const { data: role, isLoading: isRoleLoading } = useActiveMemberRole(
     activeOrg?.id,

@@ -5,14 +5,14 @@
  * duplication between streaming and non-streaming code paths.
  */
 
-import { context as otelContext } from "@opentelemetry/api";
 import {
   ApiError,
   type ArchestraInternalErrorCode,
   type InteractionSource,
   type SupportedProvider,
   type SupportedProviderDiscriminator,
-} from "@shared";
+} from "@archestra/shared";
+import { context as otelContext } from "@opentelemetry/api";
 import type { FastifyReply } from "fastify";
 import logger from "@/logging";
 import { metrics } from "@/observability";
@@ -110,6 +110,7 @@ export function buildInteractionRecord(params: {
   };
   executionId?: string;
   userId?: string;
+  virtualKeyId?: string;
   sessionId?: string | null;
   sessionSource?: SessionSource;
   source?: InteractionSource | null;
@@ -134,6 +135,7 @@ export function buildInteractionRecord(params: {
     authenticatedAppName: params.authenticatedApp?.name,
     executionId: params.executionId,
     userId: params.userId,
+    virtualKeyId: params.virtualKeyId,
     sessionId: params.sessionId,
     sessionSource: params.sessionSource,
     source: params.source,

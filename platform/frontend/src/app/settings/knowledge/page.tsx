@@ -1,6 +1,6 @@
 "use client";
 
-import { isProviderApiKeyOptional } from "@shared";
+import { isProviderApiKeyOptional } from "@archestra/shared";
 import {
   ArrowUpRight,
   Info,
@@ -17,16 +17,12 @@ import { ErrorBoundary } from "@/app/_parts/error-boundary";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { FormDialog } from "@/components/form-dialog";
 import { LlmModelSearchableSelect } from "@/components/llm-model-select";
+import { LlmProviderApiKeyDropdown } from "@/components/llm-provider-api-key-dropdown";
 import {
   LLM_PROVIDER_API_KEY_PLACEHOLDER,
   LlmProviderApiKeyForm,
   type LlmProviderApiKeyFormValues,
-  PROVIDER_CONFIG,
 } from "@/components/llm-provider-api-key-form";
-import {
-  LlmProviderApiKeyOptionLabel,
-  LlmProviderApiKeySelectItems,
-} from "@/components/llm-provider-options";
 import { LoadingSpinner, LoadingWrapper } from "@/components/loading";
 import { WithPermissions } from "@/components/roles/with-permissions";
 import {
@@ -48,12 +44,6 @@ import {
   DialogStickyFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useFeature } from "@/lib/config/config.query";
 import {
   useEmbeddingModels,
@@ -77,12 +67,17 @@ const DEFAULT_FORM_VALUES: LlmProviderApiKeyFormValues = {
   provider: "openai",
   apiKey: null,
   baseUrl: null,
+  inferenceBaseUrl: null,
   extraHeaders: [],
   scope: "org",
   teamId: null,
   vaultSecretPath: null,
   vaultSecretKey: null,
   isPrimary: true,
+  bedrockAuthMethod: "api-key",
+  awsAccessKeyId: null,
+  awsSecretAccessKey: null,
+  awsSessionToken: null,
 };
 
 const EMBEDDING_DEFAULT_FORM_VALUES: LlmProviderApiKeyFormValues = {
@@ -152,24 +147,36 @@ function AddApiKeyDialog({
         }) || formValues.apiKey);
 
   const handleCreate = form.handleSubmit(async (values) => {
+    const isBedrockSigV4 =
+      values.provider === "bedrock" && values.bedrockAuthMethod === "sigv4";
     try {
       await createMutation.mutateAsync({
         name: values.name,
         provider: values.provider,
-        apiKey: values.apiKey || undefined,
+        apiKey: isBedrockSigV4 ? undefined : values.apiKey || undefined,
         baseUrl: values.baseUrl || undefined,
+        inferenceBaseUrl: values.inferenceBaseUrl || undefined,
         scope: values.scope,
         teamId:
           values.scope === "team" && values.teamId ? values.teamId : undefined,
         isPrimary: values.isPrimary,
         vaultSecretPath:
-          byosEnabled && values.vaultSecretPath
+          !isBedrockSigV4 && byosEnabled && values.vaultSecretPath
             ? values.vaultSecretPath
             : undefined,
         vaultSecretKey:
-          byosEnabled && values.vaultSecretKey
+          !isBedrockSigV4 && byosEnabled && values.vaultSecretKey
             ? values.vaultSecretKey
             : undefined,
+        awsAccessKeyId: isBedrockSigV4
+          ? values.awsAccessKeyId || undefined
+          : undefined,
+        awsSecretAccessKey: isBedrockSigV4
+          ? values.awsSecretAccessKey || undefined
+          : undefined,
+        awsSessionToken: isBedrockSigV4
+          ? values.awsSessionToken || undefined
+          : undefined,
       });
       onOpenChange(false);
     } catch {
@@ -243,6 +250,7 @@ function ApiKeySelector({
 }) {
   const { data: apiKeys, isPending } = useAvailableLlmProviderApiKeys();
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [apiKeySelectorOpen, setApiKeySelectorOpen] = useState(false);
   const prevSelectableCountRef = useRef<number | null>(null);
 
   const allKeys = apiKeys ?? [];
@@ -250,7 +258,6 @@ function ApiKeySelector({
     ? allKeys.filter((k) => allowedKeyIds.has(k.id))
     : allKeys;
   const hasKeys = keys.length > 0;
-  const selectedKey = keys.find((key) => key.id === value) ?? null;
 
   // Auto-select the first key when transitioning from 0 → N selectable keys
   useEffect(() => {
@@ -294,42 +301,24 @@ function ApiKeySelector({
   }
 
   return (
-    <Select
-      value={value ?? ""}
-      onValueChange={(v) => onChange(v || null)}
+    <LlmProviderApiKeyDropdown
+      availableKeys={keys}
+      selectedApiKeyId={value}
       disabled={disabled}
-    >
-      <SelectTrigger
-        className={cn(
-          "w-full",
-          pulse && "animate-pulse ring-2 ring-primary/40",
-        )}
-      >
-        <SelectValue placeholder={`Select ${label}...`}>
-          {selectedKey ? (
-            <LlmProviderApiKeyOptionLabel
-              icon={PROVIDER_CONFIG[selectedKey.provider].icon}
-              providerName={PROVIDER_CONFIG[selectedKey.provider].name}
-              keyName={selectedKey.name}
-              secondaryLabel={`${selectedKey.provider} - ${selectedKey.scope}`}
-            />
-          ) : (
-            `Select ${label}...`
-          )}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <LlmProviderApiKeySelectItems
-          options={keys.map((key) => ({
-            value: key.id,
-            icon: PROVIDER_CONFIG[key.provider].icon,
-            providerName: PROVIDER_CONFIG[key.provider].name,
-            keyName: key.name,
-            secondaryLabel: `${key.provider} - ${key.scope}`,
-          }))}
-        />
-      </SelectContent>
-    </Select>
+      open={apiKeySelectorOpen}
+      onOpenChange={setApiKeySelectorOpen}
+      onSelectKey={(keyId) => {
+        onChange(keyId);
+        setApiKeySelectorOpen(false);
+      }}
+      triggerVariant="select"
+      triggerClassName={cn(
+        "w-full",
+        pulse && "animate-pulse ring-2 ring-primary/40",
+      )}
+      popoverClassName="w-[var(--radix-popover-trigger-width)]"
+      emptyTriggerLabel={`Select ${label}...`}
+    />
   );
 }
 
@@ -766,6 +755,22 @@ function KnowledgeSettingsContent() {
                       }
                     />
                   </CardRow>
+                  {(rerankerChatApiKeyId || rerankerModel) && (
+                    <div className="sm:pl-28">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!hasPermission}
+                        onClick={() => {
+                          setRerankerChatApiKeyId(null);
+                          setRerankerModel(null);
+                        }}
+                      >
+                        Clear reranking configuration
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </WithPermissions>

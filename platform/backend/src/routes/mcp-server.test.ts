@@ -1,4 +1,4 @@
-import { OAUTH_TOKEN_TYPE } from "@shared";
+import { OAUTH_TOKEN_TYPE } from "@archestra/shared";
 import { and, eq } from "drizzle-orm";
 import { vi } from "vitest";
 import db, { schema } from "@/database";
@@ -1061,6 +1061,92 @@ describe("mcp server inspect route", () => {
     expect(connectAndGetToolsMock).not.toHaveBeenCalled();
   });
 
+  // Regression: the reinstall route used to short-circuit value persistence
+  // for remote serverType, dropping any `userConfigValues` in the request
+  // body. End-user symptom was an admin adding a new required header to a
+  // remote catalog, clicking Reinstall, and the pod coming back with no
+  // value for the new header.
+  test("reinstall of a remote MCP server persists userConfigValues into the install's secret", async ({
+    makeInternalMcpCatalog,
+    makeMcpServer,
+  }) => {
+    const catalog = await makeInternalMcpCatalog({
+      name: "Remote Reinstall With New Required Header",
+      serverType: "remote",
+      serverUrl: "http://localhost:30082/mcp",
+      userConfig: {
+        header_x_api_key: {
+          type: "string",
+          title: "x-api-key",
+          description: "Newly-required header added on a catalog edit",
+          promptOnInstallation: true,
+          required: true,
+          sensitive: true,
+          headerName: "x-api-key",
+        },
+      },
+    });
+    const mcpServer = await makeMcpServer({
+      ownerId: user.id,
+      catalogId: catalog.id,
+    });
+    // makeMcpServer hardcodes `serverType: "local"`; force remote so this
+    // test exercises the remote code path of the route.
+    await db
+      .update(schema.mcpServersTable)
+      .set({ serverType: "remote" })
+      .where(eq(schema.mcpServersTable.id, mcpServer.id));
+    await McpServerUserModel.assignUserToMcpServer(mcpServer.id, user.id);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/mcp_server/${mcpServer.id}/reinstall`,
+      payload: {
+        userConfigValues: {
+          header_x_api_key: "fresh-header-value",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const [updatedServer] = await db
+      .select()
+      .from(schema.mcpServersTable)
+      .where(eq(schema.mcpServersTable.id, mcpServer.id));
+
+    expect(updatedServer?.secretId).toBeTruthy();
+    if (!updatedServer?.secretId) {
+      throw new Error("Expected reinstall to persist a secretId");
+    }
+
+    const storedSecret = await secretManager().getSecret(
+      updatedServer.secretId,
+    );
+    expect(storedSecret?.secret).toMatchObject({
+      header_x_api_key: "fresh-header-value",
+    });
+
+    // Drain the route's setImmediate-deferred reinstall so background
+    // work doesn't leak into the next test in the file. The local-
+    // reinstall test above uses 200ms total, but the remote path runs
+    // autoReinstallServer with a tool-fetch that takes longer when
+    // mocks aren't pre-primed — give it 2s so we don't leak a
+    // "pending" install whose async error fires inside the next test.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const [serverRow] = await db
+        .select()
+        .from(schema.mcpServersTable)
+        .where(eq(schema.mcpServersTable.id, mcpServer.id));
+
+      if (serverRow?.localInstallationStatus !== "pending") {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  });
+
   test("automatically retries protected remote MCP server installation with an exchanged enterprise-managed credential", async ({
     makeAccount,
     makeIdentityProvider,
@@ -1139,6 +1225,88 @@ describe("mcp server inspect route", () => {
     });
     expect(connectAndGetToolsMock.mock.calls[1][0]).toMatchObject({
       secrets: { access_token: "exchanged-github-token" },
+    });
+  });
+
+  test("recognizes broad missing authorization header errors before enterprise-managed install retry", async ({
+    makeAccount,
+    makeIdentityProvider,
+    makeInternalMcpCatalog,
+  }) => {
+    const identityProvider = await makeIdentityProvider(user.id, {
+      providerId: "missing-auth-header-idp",
+      issuer: "https://login.example.com/tenant/v2.0",
+      oidcConfig: {
+        clientId: "web-client-id",
+        clientSecret: "web-client-secret",
+        tokenEndpoint: "https://login.example.com/tenant/oauth2/v2.0/token",
+        enterpriseManagedCredentials: {
+          exchangeStrategy: "entra_obo",
+          subjectTokenType: OAUTH_TOKEN_TYPE.AccessToken,
+          tokenEndpoint: "https://login.example.com/tenant/oauth2/v2.0/token",
+          tokenEndpointAuthentication: "client_secret_post",
+        },
+      },
+    });
+
+    const catalog = await makeInternalMcpCatalog({
+      name: "Header Required Remote",
+      serverType: "remote",
+      serverUrl: "https://mcp.example.com/mcp",
+      enterpriseManagedConfig: {
+        identityProviderId: identityProvider.id,
+        requestedCredentialType: "bearer_token",
+        resourceIdentifier: "api://downstream-app",
+        tokenInjectionMode: "authorization_bearer",
+      },
+    });
+
+    await makeAccount(user.id, {
+      providerId: "missing-auth-header-idp",
+      accessToken: "session-access-token",
+    });
+
+    exchangeEnterpriseManagedCredentialMock.mockResolvedValueOnce({
+      credentialType: "bearer_token",
+      expiresInSeconds: 300,
+      issuedTokenType: OAUTH_TOKEN_TYPE.AccessToken,
+      value: "downstream-user-token",
+    });
+
+    connectAndGetToolsMock
+      .mockRejectedValueOnce(
+        new Error(
+          "Failed to connect to MCP server Header Required Remote: Streamable HTTP error: Error POSTing to endpoint: Missing X-User, X-Ticket, or Authorization header",
+        ),
+      )
+      .mockResolvedValueOnce([
+        {
+          name: "debug_auth",
+          description: "Debug auth",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/mcp_server",
+      payload: {
+        name: catalog.name,
+        catalogId: catalog.id,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(connectAndGetToolsMock).toHaveBeenCalledTimes(2);
+    expect(exchangeEnterpriseManagedCredentialMock).toHaveBeenCalledWith({
+      identityProviderId: identityProvider.id,
+      assertion: "session-access-token",
+      enterpriseManagedConfig: expect.objectContaining({
+        resourceIdentifier: "api://downstream-app",
+      }),
+    });
+    expect(connectAndGetToolsMock.mock.calls[1][0]).toMatchObject({
+      secrets: { access_token: "downstream-user-token" },
     });
   });
 
@@ -1255,7 +1423,7 @@ describe("mcp server inspect route", () => {
       method: "POST",
       url: "/api/mcp_server",
       payload: {
-        name: "Protected Resource",
+        name: catalog.name,
         catalogId: catalog.id,
         agentIds: [agent.id],
       },
@@ -1274,7 +1442,7 @@ describe("mcp server inspect route", () => {
     });
 
     const persistedTool = await ToolModel.findByName(
-      "protected_resource__read_resource_todos",
+      "protected_resource_remote__read_resource_todos",
     );
     expect(persistedTool).toMatchObject({
       catalogId: catalog.id,

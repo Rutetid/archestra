@@ -1,4 +1,4 @@
-import { SupportedProvidersSchema } from "@shared";
+import { SupportedProvidersSchema } from "@archestra/shared";
 import {
   createInsertSchema,
   createSelectSchema,
@@ -6,7 +6,9 @@ import {
 } from "drizzle-zod";
 import { z } from "zod";
 import { schema } from "@/database";
+import { ToolExposureModeSchema } from "./agent";
 import { SelectConversationChatErrorSchema } from "./conversation-chat-error";
+import { SelectConversationCompactionSchema } from "./conversation-compaction";
 import { ConversationShareVisibilitySchema } from "./conversation-share";
 
 const ConversationShareSummarySchema = z
@@ -37,12 +39,14 @@ export const SelectConversationSchema = createSelectSchema(
       name: z.string(),
       systemPrompt: z.string().nullable(),
       agentType: z.enum(["profile", "mcp_gateway", "llm_proxy", "agent"]),
+      toolExposureMode: ToolExposureModeSchema,
       llmApiKeyId: z.string().nullable(),
     })
     .nullable(),
   share: ConversationShareSummarySchema,
   messages: z.array(z.any()), // UIMessage[] from AI SDK
   chatErrors: z.array(SelectConversationChatErrorSchema),
+  compactions: z.array(SelectConversationCompactionSchema),
   ...selectExtendedFields,
 });
 
@@ -67,8 +71,7 @@ export const UpdateConversationSchema = createUpdateSchema(
 )
   .pick({
     title: true,
-    selectedModel: true,
-    selectedProvider: true,
+    modelId: true,
     chatApiKeyId: true,
     agentId: true,
     artifact: true,

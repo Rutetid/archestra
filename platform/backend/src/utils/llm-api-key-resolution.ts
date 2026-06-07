@@ -1,4 +1,7 @@
-import { isProviderApiKeyOptional, type SupportedProvider } from "@shared";
+import {
+  isProviderApiKeyOptional,
+  type SupportedProvider,
+} from "@archestra/shared";
 import { isAzureOpenAiEntraIdEnabled } from "@/clients/azure-openai-credentials";
 import { getProviderEnvApiKey } from "@/config";
 import { LlmProviderApiKeyModel, TeamModel } from "@/models";
@@ -33,6 +36,7 @@ export async function resolveProviderApiKey(params: {
     secretId: string | null;
     scope: string;
     baseUrl: string | null;
+    inferenceBaseUrl: string | null;
   } | null = null;
 
   if (userId) {
@@ -63,7 +67,7 @@ export async function resolveProviderApiKey(params: {
           apiKey: secretValue as string,
           source: resolvedApiKey.scope,
           chatApiKeyId: resolvedApiKey.id,
-          baseUrl: resolvedApiKey.baseUrl,
+          baseUrl: resolvedApiKey.inferenceBaseUrl ?? resolvedApiKey.baseUrl,
         };
       }
     }
@@ -78,7 +82,7 @@ export async function resolveProviderApiKey(params: {
         apiKey: undefined,
         source: resolvedApiKey.scope,
         chatApiKeyId: resolvedApiKey.id,
-        baseUrl: resolvedApiKey.baseUrl,
+        baseUrl: resolvedApiKey.inferenceBaseUrl ?? resolvedApiKey.baseUrl,
       };
     }
   }

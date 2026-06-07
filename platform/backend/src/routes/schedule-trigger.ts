@@ -6,7 +6,7 @@ import {
   PaginationQuerySchema,
   type PartialUIMessage,
   RouteId,
-} from "@shared";
+} from "@archestra/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { hasAnyAgentTypeAdminPermission, hasPermission } from "@/auth";
@@ -672,7 +672,7 @@ async function ensureRunConversation(params: {
   const llmSelection = await resolveConversationLlmSelectionForAgent({
     agent: {
       llmApiKeyId: agent.llmApiKeyId ?? null,
-      llmModel: agent.llmModel ?? null,
+      modelId: agent.modelId ?? null,
     },
     organizationId,
     userId,
@@ -726,8 +726,7 @@ async function ensureRunConversation(params: {
     organizationId,
     agentId,
     title: conversationTitle,
-    selectedModel: llmSelection.selectedModel,
-    selectedProvider: llmSelection.selectedProvider,
+    modelId: llmSelection.modelId,
     chatApiKeyId: llmSelection.chatApiKeyId,
     artifact: run.artifact ?? undefined,
   });

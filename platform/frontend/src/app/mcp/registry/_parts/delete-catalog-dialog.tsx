@@ -1,32 +1,41 @@
-import type { archestraApiTypes } from "@shared";
+import type { archestraApiTypes } from "@archestra/shared";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { useDeleteInternalMcpCatalogItem } from "@/lib/mcp/internal-mcp-catalog.query";
+import { useMcpServers } from "@/lib/mcp/mcp-server.query";
 
 interface DeleteCatalogDialogProps {
   item: archestraApiTypes.GetInternalMcpCatalogResponses["200"][number] | null;
   onClose: () => void;
-  installationCount: number;
+  /** Called only after a successful deletion (before onClose). */
+  onDeleted?: () => void;
 }
 
 export function DeleteCatalogDialog({
   item,
   onClose,
-  installationCount,
+  onDeleted,
 }: DeleteCatalogDialogProps) {
   const deleteMutation = useDeleteInternalMcpCatalogItem();
+  const { data: installedServers = [] } = useMcpServers();
 
   const handleConfirm = async () => {
     if (!item) return;
     await deleteMutation.mutateAsync(item.id);
+    onDeleted?.();
     onClose();
   };
 
-  const ConfirmationContent = ({ name }: { name: string }) => (
-    <span>
+  // Deleting a catalog item uninstalls every server installed from it.
+  const installationCount = item
+    ? installedServers.filter((s) => s.catalogId === item.id).length
+    : 0;
+
+  const question = item ? (
+    <p>
       Are you sure you want to delete{" "}
-      <span className="font-semibold break-all">"{name}"</span>?
-    </span>
-  );
+      <span className="font-semibold break-all">"{item.name}"</span>?
+    </p>
+  ) : null;
 
   return (
     <DeleteConfirmDialog
@@ -36,16 +45,17 @@ export function DeleteCatalogDialog({
       description={
         item ? (
           installationCount > 0 ? (
-            <span className="block space-y-3">
-              <ConfirmationContent name={item.name} />
-              <span className="block text-sm">
+            <div className="space-y-2">
+              {question}
+              <p className="text-sm text-muted-foreground">
                 There are currently <strong>{installationCount}</strong>{" "}
-                installation(s) of this server. Deleting this catalog entry will
-                also uninstall all associated servers.
-              </span>
-            </span>
+                {installationCount === 1 ? "installation" : "installations"} of
+                this server. Deleting this catalog item will uninstall all of
+                them.
+              </p>
+            </div>
           ) : (
-            <ConfirmationContent name={item.name} />
+            question
           )
         ) : (
           ""

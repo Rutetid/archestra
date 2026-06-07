@@ -18,6 +18,8 @@ export interface ArchestraContext {
   agentId?: string;
   /** The organization ID */
   organizationId?: string;
+  /** Virtual API key ID used for the request */
+  virtualKeyId?: string;
   /** Token authentication context */
   tokenAuth?: TokenAuthContext;
   /** Session ID for grouping related LLM requests in logs */
@@ -34,4 +36,10 @@ export interface ArchestraContext {
   abortSignal?: AbortSignal;
   /** Whether the current caller context is still trusted/safe */
   contextIsTrusted?: boolean;
+  /**
+   * Chat can pause before execution for user approval. When true, tools that
+   * require approval are allowed to continue because the chat harness already
+   * handled the approval gate.
+   */
+  approvalRequiredPoliciesHandled?: boolean;
 }

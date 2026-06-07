@@ -1,4 +1,3 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   TOOL_ARTIFACT_WRITE_SHORT_NAME,
   TOOL_SWAP_AGENT_SHORT_NAME,
@@ -6,7 +5,8 @@ import {
   TOOL_TODO_WRITE_SHORT_NAME,
   type ToolStateMcpToolError,
   ToolStateMcpToolErrorSchema,
-} from "@shared";
+} from "@archestra/shared";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { isAgentTypeAdmin } from "@/auth/agent-type-permissions";
 import logger from "@/logging";
@@ -187,6 +187,8 @@ const registry = defineArchestraTools([
       );
 
       try {
+        let successMessage = `Successfully updated artifact (${args.content.length} characters)`;
+
         // Scheduled run context — write to the run (conversationId is a
         // synthetic isolation key, not a real DB conversation)
         if (context.scheduleTriggerRunId) {
@@ -200,6 +202,16 @@ const registry = defineArchestraTools([
               "Failed to update scheduled run artifact. The run may no longer exist.",
             );
           }
+        } else if (context.chatOpsBindingId) {
+          logger.info(
+            {
+              agentId: contextAgent.id,
+              chatOpsBindingId: context.chatOpsBindingId,
+              chatOpsThreadId: context.chatOpsThreadId ?? null,
+            },
+            "artifact_write completed in chatops context without persistent artifact storage",
+          );
+          successMessage = `Accepted artifact content (${args.content.length} characters). ChatOps does not persist conversation artifacts, so include relevant artifact content in the final response.`;
         } else if (
           context.conversationId &&
           context.userId &&
@@ -225,7 +237,7 @@ const registry = defineArchestraTools([
 
         return structuredSuccessResult(
           { success: true, characterCount: args.content.length },
-          `Successfully updated artifact (${args.content.length} characters)`,
+          successMessage,
         );
       } catch (error) {
         return catchError(error, "writing artifact");
@@ -398,7 +410,7 @@ async function handleSwapAgent(params: {
       const llmSelection = await resolveConversationLlmSelectionForAgent({
         agent: {
           llmApiKeyId: targetAgent.llmApiKeyId ?? null,
-          llmModel: targetAgent.llmModel ?? null,
+          modelId: targetAgent.modelId ?? null,
         },
         organizationId: context.organizationId,
         userId: context.userId,
@@ -413,8 +425,7 @@ async function handleSwapAgent(params: {
         {
           agentId: targetAgent.id,
           chatApiKeyId: llmSelection.chatApiKeyId,
-          selectedModel: llmSelection.selectedModel,
-          selectedProvider: llmSelection.selectedProvider,
+          modelId: llmSelection.modelId,
         },
       );
       if (!updated) {
@@ -548,7 +559,7 @@ async function handleSwapToDefaultAgent(params: {
       const llmSelection = await resolveConversationLlmSelectionForAgent({
         agent: {
           llmApiKeyId: targetAgent.llmApiKeyId ?? null,
-          llmModel: targetAgent.llmModel ?? null,
+          modelId: targetAgent.modelId ?? null,
         },
         organizationId: context.organizationId,
         userId: context.userId,
@@ -561,8 +572,7 @@ async function handleSwapToDefaultAgent(params: {
         {
           agentId: defaultAgentId,
           chatApiKeyId: llmSelection.chatApiKeyId,
-          selectedModel: llmSelection.selectedModel,
-          selectedProvider: llmSelection.selectedProvider,
+          modelId: llmSelection.modelId,
         },
       );
       if (!updated) {

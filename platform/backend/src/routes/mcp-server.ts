@@ -1,5 +1,9 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { isPlaywrightCatalogItem, OAUTH_TOKEN_TYPE, RouteId } from "@shared";
+import {
+  isPlaywrightCatalogItem,
+  OAUTH_TOKEN_TYPE,
+  RouteId,
+} from "@archestra/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { hasPermission, userHasPermission } from "@/auth";
@@ -200,6 +204,9 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
 
         // Set serverType from catalog item
         serverData.serverType = catalogItem.serverType;
+
+        // The catalog row is the source of truth for the install name.
+        serverData.name = catalogItem.name;
 
         // Scope-based authorization (personal / team / org).
         await validateScopeAndAuthorization({
@@ -506,7 +513,7 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
           };
           let hasPromptedSecrets = false;
 
-          // Collect all secret-type env vars (both static and prompted).
+          // Collect all secret-type env vars (static and prompted).
           for (const envDef of catalogItem.localConfig?.environment ?? []) {
             if (envDef.type === "secret") {
               let value: string | undefined;
@@ -610,10 +617,25 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
         }
       }
 
+      // Persist plain (non-secret) values for promptOnInstallation env
+      // vars onto the install row's `environmentValues` jsonb column.
+      // Secret-typed prompted values live in the K8s Secret bag handled
+      // by the block above.
+      const installEnvironmentValues: Record<string, string> = {};
+      for (const envDef of catalogItem?.localConfig?.environment ?? []) {
+        if (envDef.promptOnInstallation && envDef.type !== "secret") {
+          const value = environmentValues?.[envDef.key];
+          if (value !== undefined && value !== null && value !== "") {
+            installEnvironmentValues[envDef.key] = String(value);
+          }
+        }
+      }
+
       // Create the MCP server with optional secret reference
       const mcpServer = await McpServerModel.create({
         ...serverData,
         ...(secretId && { secretId }),
+        environmentValues: installEnvironmentValues,
       });
 
       try {
@@ -702,11 +724,38 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
                 const createdTools =
                   await ToolModel.bulkCreateToolsIfNotExists(toolsToCreate);
 
+                // Clone reconciliation: if this catalog has provisional cloned
+                // tools (first install of a clone), confirm the ones the server
+                // actually exposes and drop the rest. Genuinely-new tools were
+                // just created above with default policies (+ configurator).
+                const provisionalCount =
+                  await ToolModel.countProvisionalForCatalog(capturedCatalogId);
+                let confirmedClonedToolIds: string[] = [];
+                if (provisionalCount > 0) {
+                  const discoveredToolNames = new Set(
+                    toolsToCreate.map((t) => t.name),
+                  );
+                  const { confirmedToolIds } =
+                    await ToolModel.reconcileClonedCatalogTools({
+                      catalogId: capturedCatalogId,
+                      discoveredToolNames,
+                    });
+                  confirmedClonedToolIds = confirmedToolIds;
+                }
+
                 // For personal installs, auto-assign every discovered tool to the
                 // installer's personal gateway alongside any explicit agentIds.
                 // Team-scoped installs only honor explicit agentIds.
                 {
-                  const toolIds = createdTools.map((t) => t.id);
+                  // Confirmed clone tools are usually already in `createdTools`
+                  // (bulkCreateToolsIfNotExists returns existing rows matched by
+                  // name); include them explicitly as defense-in-depth and dedupe.
+                  const toolIds = Array.from(
+                    new Set([
+                      ...createdTools.map((t) => t.id),
+                      ...confirmedClonedToolIds,
+                    ]),
+                  );
                   if (toolIds.length > 0) {
                     const targetAgentIds: string[] = [];
                     if (!mcpServer.teamId) {
@@ -832,11 +881,37 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
         const createdTools =
           await ToolModel.bulkCreateToolsIfNotExists(toolsToCreate);
 
+        // Clone reconciliation: if this catalog has provisional cloned
+        // tools (first install of a clone), confirm the ones the server
+        // actually exposes and drop the rest. Genuinely-new tools were
+        // just created above with default policies (+ configurator).
+        const provisionalCount = await ToolModel.countProvisionalForCatalog(
+          catalogItem.id,
+        );
+        let confirmedClonedToolIds: string[] = [];
+        if (provisionalCount > 0) {
+          const discoveredToolNames = new Set(toolsToCreate.map((t) => t.name));
+          const { confirmedToolIds } =
+            await ToolModel.reconcileClonedCatalogTools({
+              catalogId: catalogItem.id,
+              discoveredToolNames,
+            });
+          confirmedClonedToolIds = confirmedToolIds;
+        }
+
         // For personal installs, auto-assign every discovered tool to the
         // installer's personal gateway alongside any explicit agentIds.
         // Team-scoped installs only honor explicit agentIds.
         {
-          const toolIds = createdTools.map((t) => t.id);
+          // Confirmed clone tools are usually already in `createdTools`
+          // (bulkCreateToolsIfNotExists returns existing rows matched by
+          // name); include them explicitly as defense-in-depth and dedupe.
+          const toolIds = Array.from(
+            new Set([
+              ...createdTools.map((t) => t.id),
+              ...confirmedClonedToolIds,
+            ]),
+          );
           if (toolIds.length > 0) {
             const targetAgentIds: string[] = [];
             if (!mcpServer.teamId) {
@@ -1487,11 +1562,11 @@ const mcpServerRoutes: FastifyPluginAsyncZod = async (fastify) => {
         throw new ApiError(404, "Catalog item not found for this server");
       }
 
-      // For local servers with new environment values or user-config values: update/create the secret
+      // New env/userConfig values land in this install's secret bag. The
+      // runtime reload below reads `secretId` to pick them up.
       if (
-        mcpServer.serverType === "local" &&
-        ((environmentValues && Object.keys(environmentValues).length > 0) ||
-          (userConfigValues && Object.keys(userConfigValues).length > 0))
+        (environmentValues && Object.keys(environmentValues).length > 0) ||
+        (userConfigValues && Object.keys(userConfigValues).length > 0)
       ) {
         const catalogStaticUserConfigValues = getCatalogStaticUserConfigValues(
           catalogItem.userConfig,
@@ -2073,7 +2148,7 @@ function isInstallDiscoveryAuthError(error: unknown): boolean {
     lower.includes("forbidden") ||
     lower.includes("authentication failed") ||
     lower.includes("authentication required") ||
-    lower.includes("missing required authorization header") ||
+    (lower.includes("missing") && lower.includes("authorization header")) ||
     lower.includes("invalid authorization header") ||
     lower.includes("invalid token") ||
     lower.includes("access denied") ||

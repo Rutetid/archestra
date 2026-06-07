@@ -3,7 +3,7 @@ import {
   type archestraApiTypes,
   PLAYWRIGHT_MCP_CATALOG_ID,
   PLAYWRIGHT_MCP_SERVER_NAME,
-} from "@shared";
+} from "@archestra/shared";
 import {
   keepPreviousData,
   useMutation,
@@ -13,8 +13,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { invalidateToolAssignmentQueries } from "@/lib/agent-tools.hook";
+import { useSession } from "@/lib/auth/auth.query";
 import { conversationStorageKeys } from "@/lib/chat/chat-utils";
-import { authClient } from "@/lib/clients/auth/auth-client";
 import { useMcpServers } from "@/lib/mcp/mcp-server.query";
 import { handleApiError } from "@/lib/utils";
 
@@ -24,6 +24,7 @@ const {
   getChatAgentMcpTools,
   createChatConversation,
   updateChatConversation,
+  compactChatConversation,
   deleteChatConversation,
   generateChatConversationTitle,
   getConversationEnabledTools,
@@ -36,6 +37,8 @@ const {
   getInternalMcpCatalogTools,
   bulkAssignTools,
   stopChatStream,
+  getMemberDefaultModel,
+  updateMemberDefaultModel,
 } = archestraApiSdk;
 
 export function mergeUpdatedConversationIntoCache(
@@ -56,17 +59,8 @@ export function mergeUpdatedConversationIntoCache(
   if (variables.title !== undefined) {
     merged.title = updatedConversation.title;
   }
-  if (
-    variables.selectedModel !== undefined ||
-    variables.agentId !== undefined
-  ) {
-    merged.selectedModel = updatedConversation.selectedModel;
-  }
-  if (
-    variables.selectedProvider !== undefined ||
-    variables.agentId !== undefined
-  ) {
-    merged.selectedProvider = updatedConversation.selectedProvider;
+  if (variables.modelId !== undefined || variables.agentId !== undefined) {
+    merged.modelId = updatedConversation.modelId;
   }
   if (variables.chatApiKeyId !== undefined || variables.agentId !== undefined) {
     merged.chatApiKeyId = updatedConversation.chatApiKeyId;
@@ -119,7 +113,6 @@ export function useConversations({
   return useQuery({
     queryKey: ["conversations", search],
     queryFn: async () => {
-      if (!enabled) return [];
       const trimmedSearch = search?.trim();
 
       const { data, error } = await getChatConversations({
@@ -132,6 +125,7 @@ export function useConversations({
       }
       return data;
     },
+    enabled,
     staleTime: search ? 0 : 2_000, // No stale time for searches, 2 seconds otherwise
     gcTime: 10 * 60 * 1000,
     refetchOnWindowFocus: false,
@@ -144,16 +138,16 @@ export function useCreateConversation() {
   return useMutation({
     mutationFn: async ({
       agentId,
-      selectedModel,
-      selectedProvider,
+      modelId,
       chatApiKeyId,
+      title,
     }: NonNullable<archestraApiTypes.CreateChatConversationData["body"]>) => {
       const { data, error } = await createChatConversation({
         body: {
           agentId,
-          selectedModel,
-          selectedProvider,
+          modelId,
           chatApiKeyId: chatApiKeyId ?? undefined,
+          title,
         },
       });
       if (error) {
@@ -166,12 +160,10 @@ export function useCreateConversation() {
       if (!newConversation) return;
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       // Immediately populate the individual conversation cache to avoid loading state
-      if (newConversation) {
-        queryClient.setQueryData(
-          ["conversation", newConversation.id],
-          newConversation,
-        );
-      }
+      queryClient.setQueryData(
+        ["conversation", newConversation.id],
+        newConversation,
+      );
     },
   });
 }
@@ -183,8 +175,7 @@ export function useUpdateConversation() {
     mutationFn: async ({
       id,
       title,
-      selectedModel,
-      selectedProvider,
+      modelId,
       chatApiKeyId,
       agentId,
       pinnedAt,
@@ -195,8 +186,7 @@ export function useUpdateConversation() {
         path: { id },
         body: {
           title,
-          selectedModel,
-          selectedProvider,
+          modelId,
           chatApiKeyId,
           agentId,
           pinnedAt,
@@ -215,14 +205,21 @@ export function useUpdateConversation() {
         (old: typeof data | undefined) =>
           mergeUpdatedConversationIntoCache(old, data, variables),
       );
+
+      // Update title in cache
+      if (variables.title !== undefined) {
+        queryClient.setQueriesData<
+          archestraApiTypes.GetChatConversationsResponses["200"]
+        >({ queryKey: ["conversations"] }, (old) =>
+          old?.map((c) =>
+            c.id === variables.id ? { ...c, title: data.title } : c,
+          ),
+        );
+      }
       // Only invalidate the conversations list for sidebar-relevant changes
-      // (title, pin status, agent). Model/key updates don't affect the sidebar
+      // (pin status, agent). Model/key updates don't affect the sidebar
       // and unnecessary invalidation causes cascading re-renders.
-      if (
-        variables.title !== undefined ||
-        variables.pinnedAt !== undefined ||
-        variables.agentId
-      ) {
+      if (variables.pinnedAt !== undefined || variables.agentId) {
         queryClient.invalidateQueries({ queryKey: ["conversations"] });
       }
       if (variables.agentId) {
@@ -235,6 +232,52 @@ export function useUpdateConversation() {
   });
 }
 
+/**
+ * The current user's default (model, key) pair — the "member" level of the
+ * model-resolution chain. Used to preselect the model when opening a new chat.
+ */
+export function useMemberDefaultModel() {
+  return useQuery({
+    queryKey: ["member-default-model"],
+    queryFn: async () => {
+      const response = await getMemberDefaultModel();
+      if (response.error) {
+        handleApiError(response.error);
+        return { modelId: null, chatApiKeyId: null };
+      }
+      return response.data;
+    },
+  });
+}
+
+/**
+ * Persist the current user's default (model, key) pair. Fired whenever the
+ * user changes the model in chat so the next new chat reuses their choice
+ * (the "member" level of the model-resolution chain).
+ */
+export function useUpdateMemberDefaultModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (body: {
+      modelId: string | null;
+      chatApiKeyId: string | null;
+    }) => {
+      const { data, error } = await updateMemberDefaultModel({ body });
+      if (error) {
+        handleApiError(error);
+        return null;
+      }
+      return data;
+    },
+    onSuccess: (data) => {
+      if (data) {
+        queryClient.setQueryData(["member-default-model"], data);
+      }
+    },
+  });
+}
+
 export function usePinConversation() {
   const updateMutation = useUpdateConversation();
 
@@ -242,6 +285,35 @@ export function usePinConversation() {
     mutationFn: async ({ id, pinned }: { id: string; pinned: boolean }) => {
       const pinnedAt = pinned ? new Date().toISOString() : null;
       return updateMutation.mutateAsync({ id, pinnedAt });
+    },
+  });
+}
+
+export function useCompactConversation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      const { data, error } = await compactChatConversation({
+        path: { id },
+      });
+
+      if (error) {
+        handleApiError(error);
+        return null;
+      }
+
+      return data;
+    },
+    onSuccess: (data, variables) => {
+      if (!data) return;
+      queryClient.setQueryData(
+        ["conversation", variables.id],
+        data.conversation,
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["conversation", variables.id],
+      });
     },
   });
 }
@@ -266,14 +338,17 @@ export function useDeleteConversation() {
       await queryClient.cancelQueries({ queryKey: ["conversations"] });
 
       // Snapshot all conversation list caches (one per search query) for rollback
-      const previousQueries = queryClient.getQueriesData<{ id: string }[]>({
+      const previousQueries = queryClient.getQueriesData<
+        archestraApiTypes.GetChatConversationsResponses["200"]
+      >({
         queryKey: ["conversations"],
       });
 
       // Optimistically remove the conversation from every cached list
-      queryClient.setQueriesData<{ id: string }[]>(
-        { queryKey: ["conversations"] },
-        (old) => (old ? old.filter((c) => c.id !== deletedId) : old),
+      queryClient.setQueriesData<
+        archestraApiTypes.GetChatConversationsResponses["200"]
+      >({ queryKey: ["conversations"] }, (old) =>
+        old ? old.filter((c) => c.id !== deletedId) : old,
       );
 
       return { previousQueries };
@@ -294,6 +369,7 @@ export function useDeleteConversation() {
         const keys = conversationStorageKeys(deletedId);
         localStorage.removeItem(keys.artifactOpen);
         localStorage.removeItem(keys.draft);
+        localStorage.removeItem(keys.pinnedCanvas);
       }
 
       toast.success("Conversation deleted");
@@ -342,11 +418,22 @@ export function useGenerateConversationTitle() {
       return data;
     },
     onSuccess: (data, variables) => {
-      if (!data) return;
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      queryClient.invalidateQueries({
-        queryKey: ["conversation", variables.id],
-      });
+      if (!data) {
+        return;
+      }
+
+      queryClient.setQueryData(
+        ["conversation", variables.id],
+        (old: archestraApiTypes.GetChatConversationResponses["200"] | null) =>
+          old ? { ...old, title: data.title } : old,
+      );
+      queryClient.setQueriesData<
+        archestraApiTypes.GetChatConversationsResponses["200"]
+      >({ queryKey: ["conversations"] }, (old) =>
+        old?.map((c) =>
+          c.id === variables.id ? { ...c, title: data.title } : c,
+        ),
+      );
     },
   });
 }
@@ -726,7 +813,7 @@ export function useHasPlaywrightMcpTools(
   const playwrightServersQuery = useMcpServers({
     catalogId: PLAYWRIGHT_MCP_CATALOG_ID,
   });
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const currentUserId = session?.user?.id;
   // Find the server owned by the current user (admins see all servers)
   const playwrightServer = playwrightServersQuery.data?.find(

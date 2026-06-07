@@ -1,18 +1,18 @@
 "use client";
 
-import { DEFAULT_ADMIN_EMAIL } from "@shared";
+import { DEFAULT_ADMIN_EMAIL } from "@archestra/shared";
 import { AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { DefaultCredentialsWarning } from "@/components/default-credentials-warning";
 import {
   useDefaultCredentialsEnabled,
   useHasPermissions,
+  useSession,
 } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
 import { useDisableBasicAuth, useFeature } from "@/lib/config/config.query";
 
 export function SidebarWarnings() {
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const userEmail = session?.user?.email;
   const { data: defaultCredentialsEnabled, isLoading: isLoadingCreds } =
     useDefaultCredentialsEnabled();

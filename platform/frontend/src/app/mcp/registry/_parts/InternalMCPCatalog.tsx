@@ -6,7 +6,7 @@ import {
   MCP_CATALOG_INSTALL_QUERY_PARAM,
   MCP_CATALOG_REAUTH_QUERY_PARAM,
   MCP_CATALOG_SERVER_QUERY_PARAM,
-} from "@shared";
+} from "@archestra/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -25,7 +25,7 @@ import {
 } from "@/components/oauth-confirmation-dialog";
 import { SearchInput } from "@/components/search-input";
 import { Button } from "@/components/ui/button";
-import { useHasPermissions } from "@/lib/auth/auth.query";
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { useInitiateOAuth } from "@/lib/auth/oauth.query";
 import {
   clearInstallationCompleteCatalogId,
@@ -44,17 +44,18 @@ import {
   setOAuthTeamId,
   setOAuthUserConfigValues,
 } from "@/lib/auth/oauth-session";
-import { authClient } from "@/lib/clients/auth/auth-client";
 import { useDialogs } from "@/lib/hooks/use-dialog";
 import { useMcpRegistryServer } from "@/lib/mcp/external-mcp-catalog.query";
 import {
   useInternalMcpCatalog,
   useMcpCatalogLabelKeys,
   useMcpCatalogLabelValues,
+  useReinstallInternalMcpCatalogItem,
 } from "@/lib/mcp/internal-mcp-catalog.query";
 import {
   useInstallMcpServer,
   useMcpDeploymentStatuses,
+  useMcpInstallationStatusCacheSync,
   useMcpServers,
   useReauthenticateMcpServer,
   useReinstallMcpServer,
@@ -71,6 +72,8 @@ import {
   type LocalServerInstallResult,
 } from "./local-server-install-dialog";
 import { ManageUsersDialog } from "./manage-users-dialog";
+import type { McpCatalogFormValues } from "./mcp-catalog-form.types";
+import { buildCloneFormValues } from "./mcp-catalog-form.utils";
 import {
   type CatalogItem,
   type InstalledServer,
@@ -105,21 +108,31 @@ export function InternalMCPCatalog({
   const [installingServerIds, setInstallingServerIds] = useState<Set<string>>(
     new Set(),
   );
+  const [restartingServerIds, setRestartingServerIds] = useState<Set<string>>(
+    new Set(),
+  );
   // Track server IDs that are first-time installations (for auto-opening assignments dialog)
   const [firstInstallationServerIds, setFirstInstallationServerIds] = useState<
     Set<string>
   >(new Set());
   const { data: installedServers } = useMcpServers({
     initialData: initialInstalledServers,
-    hasInstallingServers: installingServerIds.size > 0,
   });
+  useMcpInstallationStatusCacheSync();
   const installMutation = useInstallMcpServer();
   const reinstallMutation = useReinstallMcpServer();
+  // When the card requests an admin combined reinstall, remember which
+  // catalog id needs its shared pod recreated *after* the per-install
+  // mutation finishes. Cleared in finally blocks below.
+  const [pendingCatalogReinstallId, setPendingCatalogReinstallId] = useState<
+    string | null
+  >(null);
+  const reinstallCatalogMutation = useReinstallInternalMcpCatalogItem();
   const reauthMutation = useReauthenticateMcpServer();
   const initiateOAuthMutation = useInitiateOAuth();
   const deploymentStatuses = useMcpDeploymentStatuses();
-  const session = authClient.useSession();
-  const currentUserId = session.data?.user?.id;
+  const { data: session } = useSession();
+  const currentUserId = session?.user?.id;
 
   const { isDialogOpened, openDialog, closeDialog } = useDialogs<
     | "create"
@@ -135,6 +148,10 @@ export function InternalMCPCatalog({
   >();
 
   const [editingItem, setEditingItem] = useState<CatalogItem | null>(null);
+  const [cloneValues, setCloneValues] = useState<McpCatalogFormValues | null>(
+    null,
+  );
+  const [cloneSourceId, setCloneSourceId] = useState<string | null>(null);
   const [deletingItem, setDeletingItem] = useState<CatalogItem | null>(null);
   const [installingItemId, setInstallingItemId] = useState<string | null>(null);
 
@@ -166,6 +183,12 @@ export function InternalMCPCatalog({
     useState<CatalogItem | null>(null);
   const [catalogItemForReinstall, setCatalogItemForReinstall] =
     useState<CatalogItem | null>(null);
+  // When reinstalling via the card, this holds every install flagged for
+  // reinstall — so handleReinstallConfirm can fan out instead of only
+  // reinstalling a single install.
+  const [reinstallFlaggedTargets, setReinstallFlaggedTargets] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
   const [noAuthCatalogItem, setNoAuthCatalogItem] =
     useState<CatalogItem | null>(null);
   const [localServerCatalogItem, setLocalServerCatalogItem] =
@@ -223,7 +246,9 @@ export function InternalMCPCatalog({
           const server = installedServers.find((s) => s.id === serverId);
           if (server) {
             if (server.localInstallationStatus === "success") {
-              toast.success(`Successfully installed ${server.name}`);
+              if (!restartingServerIds.has(serverId)) {
+                toast.success(`Successfully installed ${server.name}`);
+              }
               // Force immediate deployment status refresh via WebSocket
               websocketService.send({
                 type: "subscribe_mcp_deployment_statuses",
@@ -253,6 +278,17 @@ export function InternalMCPCatalog({
                 }
               }
             }
+            if (
+              restartingServerIds.has(serverId) &&
+              (server.localInstallationStatus === "success" ||
+                server.localInstallationStatus === "error")
+            ) {
+              setRestartingServerIds((prev) => {
+                const newSet = new Set(prev);
+                newSet.delete(serverId);
+                return newSet;
+              });
+            }
             // Note: No error toast - the error banner on the card provides feedback
           }
         });
@@ -261,6 +297,7 @@ export function InternalMCPCatalog({
   }, [
     installedServers,
     installingServerIds,
+    restartingServerIds,
     queryClient,
     firstInstallationServerIds,
   ]);
@@ -516,7 +553,10 @@ export function InternalMCPCatalog({
   // Install directly without opening a dialog (works for personal, team, and org)
   const handleDirectInstall = async (
     catalogItem: CatalogItem,
-    target?: { teamId?: string; scope?: McpServerInstallScope },
+    target?: {
+      teamId?: string;
+      scope?: McpServerInstallScope;
+    },
   ) => {
     setInstallingItemId(catalogItem.id);
     const scope: McpServerInstallScope =
@@ -568,7 +608,10 @@ export function InternalMCPCatalog({
     teamId: string,
   ) => {
     if (canDirectInstall(catalogItem)) {
-      handleDirectInstall(catalogItem, { teamId, scope: "team" });
+      handleDirectInstall(catalogItem, {
+        teamId,
+        scope: "team",
+      });
     } else {
       setPreselectedTeamId(teamId);
       if (catalogItem.serverType === "local") {
@@ -610,7 +653,7 @@ export function InternalMCPCatalog({
     setInstallingItemId(catalogItem.id);
     await installMutation.mutateAsync({
       name: catalogItem.name,
-      catalogId: catalogItem.id,
+      catalogId: result.catalogId,
       scope: result.scope,
       teamId:
         result.scope === "team" ? (result.teamId ?? undefined) : undefined,
@@ -690,33 +733,61 @@ export function InternalMCPCatalog({
 
     // Check if this is a reinstall (updating existing server) vs new installation
     if (reinstallServerId) {
-      // Reinstall mode - call reinstall endpoint with new environment values
+      // Reinstall mode - apply the submitted values to every flagged install
+      // in the preset family (or just the single one if the card didn't pass a
+      // list). Same env/userConfig bag is applied to each — operators can edit
+      // per-install secrets afterwards from Manage credentials.
+      const targetIds =
+        reinstallFlaggedTargets.length > 0
+          ? reinstallFlaggedTargets.map((t) => t.id)
+          : [reinstallServerId];
+      const targets = (installedServers ?? []).filter((s) =>
+        targetIds.includes(s.id),
+      );
+
       setInstallingItemId(localServerCatalogItem.id);
-      setInstallingServerIds((prev) => new Set(prev).add(reinstallServerId));
+      setInstallingServerIds((prev) => {
+        const next = new Set(prev);
+        for (const t of targets) next.add(t.id);
+        return next;
+      });
       closeDialog("local-install");
+      const catalogItemName = localServerCatalogItem.name;
       setLocalServerCatalogItem(null);
       setReinstallServerId(null);
       setReinstallServerTeamId(null);
       setReinstallServerScope(undefined);
 
-      const serverIdToReinstall = reinstallServerId;
       try {
-        await reinstallMutation.mutateAsync({
-          id: serverIdToReinstall,
-          name: localServerCatalogItem.name,
-          environmentValues: installResult.environmentValues,
-          userConfigValues: installResult.userConfigValues,
-          isByosVault: installResult.isByosVault,
-          serviceAccount: installResult.serviceAccount,
-        });
+        await Promise.all(
+          targets.map((t) =>
+            reinstallMutation.mutateAsync({
+              id: t.id,
+              name: catalogItemName,
+              environmentValues: installResult.environmentValues,
+              userConfigValues: installResult.userConfigValues,
+              isByosVault: installResult.isByosVault,
+              serviceAccount: installResult.serviceAccount,
+            }),
+          ),
+        );
+        if (pendingCatalogReinstallId) {
+          // Per-install mutation persisted the admin's new prompted
+          // values; now recreate the shared pod and cascade tool sync
+          // to every tenant. If this step fails, the catalog flag stays
+          // set and the next click will retry it directly (no modal,
+          // since the admin's reinstall_required is already cleared).
+          await reinstallCatalogMutation.mutateAsync(pendingCatalogReinstallId);
+        }
       } finally {
-        // Clear installing state whether success or error
         setInstallingItemId(null);
         setInstallingServerIds((prev) => {
-          const newSet = new Set(prev);
-          newSet.delete(serverIdToReinstall);
-          return newSet;
+          const next = new Set(prev);
+          for (const t of targets) next.delete(t.id);
+          return next;
         });
+        setReinstallFlaggedTargets([]);
+        setPendingCatalogReinstallId(null);
       }
       return;
     }
@@ -730,7 +801,7 @@ export function InternalMCPCatalog({
     setInstallingItemId(localServerCatalogItem.id);
     const result = await installMutation.mutateAsync({
       name: localServerCatalogItem.name,
-      catalogId: localServerCatalogItem.id,
+      catalogId: installResult.catalogId,
       environmentValues: installResult.environmentValues,
       userConfigValues: installResult.userConfigValues,
       isByosVault: installResult.isByosVault,
@@ -780,11 +851,41 @@ export function InternalMCPCatalog({
       return;
     }
 
+    // Reinstall mode. Scope and team are fixed on the existing row, so
+    // result.scope / result.teamId from the dialog are dropped here.
+    if (reinstallServerId) {
+      const target = (installedServers ?? []).find(
+        (s) => s.id === reinstallServerId,
+      );
+      const targetId = reinstallServerId;
+      setInstallingItemId(catalogItem.id);
+      setInstallingServerIds((prev) => new Set(prev).add(targetId));
+      closeDialog("remote-install");
+      setSelectedCatalogItem(null);
+      setReinstallServerId(null);
+
+      try {
+        await reinstallMutation.mutateAsync({
+          id: targetId,
+          name: target?.name ?? catalogItem.name,
+          ...credentialPayload,
+        });
+      } finally {
+        setInstallingItemId(null);
+        setInstallingServerIds((prev) => {
+          const next = new Set(prev);
+          next.delete(targetId);
+          return next;
+        });
+      }
+      return;
+    }
+
     setInstallingItemId(catalogItem.id);
 
     await installMutation.mutateAsync({
       name: catalogItem.name,
-      catalogId: catalogItem.id,
+      catalogId: result.catalogId,
       ...credentialPayload,
       scope: result.scope,
       teamId:
@@ -890,20 +991,38 @@ export function InternalMCPCatalog({
     return aggregated;
   };
 
-  const handleReinstall = async (catalogItem: CatalogItem) => {
-    // For local servers, find the current user's specific installation
-    // For remote servers, find any installation (there should be only one per catalog)
-    let installedServer: InstalledServer | undefined;
-    if (catalogItem.serverType === "local" && currentUserId) {
-      installedServer = installedServers?.find(
-        (server) =>
-          server.catalogId === catalogItem.id &&
-          server.ownerId === currentUserId,
-      );
-    } else {
-      installedServer = installedServers?.find(
-        (server) => server.catalogId === catalogItem.id,
-      );
+  const handleReinstall = async (
+    catalogItem: CatalogItem,
+    flaggedInstalls?: Array<{
+      id: string;
+      name: string;
+    }>,
+    options?: { alsoReinstallCatalog?: boolean },
+  ) => {
+    // The card passes every flagged install so the confirm step can fan out.
+    // If the caller didn't supply any, fall back to the parent install.
+    const flagged =
+      flaggedInstalls && flaggedInstalls.length > 0
+        ? (installedServers ?? []).filter((s) =>
+            flaggedInstalls.some((f) => f.id === s.id),
+          )
+        : [];
+
+    let installedServer: InstalledServer | undefined =
+      flagged.find((s) => s.catalogId === catalogItem.id) ?? flagged[0];
+
+    if (!installedServer) {
+      if (catalogItem.serverType === "local" && currentUserId) {
+        installedServer = installedServers?.find(
+          (server) =>
+            server.catalogId === catalogItem.id &&
+            server.ownerId === currentUserId,
+        );
+      } else {
+        installedServer = installedServers?.find(
+          (server) => server.catalogId === catalogItem.id,
+        );
+      }
     }
 
     if (!installedServer) {
@@ -911,17 +1030,39 @@ export function InternalMCPCatalog({
       return;
     }
 
-    // For local servers: check if there are prompted env vars that require user input
-    // If so, open the install dialog directly in reinstall mode
-    // For remote servers: show confirmation dialog (since they may need OAuth re-auth)
-    if (catalogItem.serverType === "local") {
-      const promptedEnvVars =
-        catalogItem.localConfig?.environment?.filter(
-          (env) => env.promptOnInstallation === true,
-        ) || [];
+    if (options?.alsoReinstallCatalog) {
+      setPendingCatalogReinstallId(catalogItem.id);
+    }
 
-      if (promptedEnvVars.length > 0) {
-        // Has prompted env vars - open dialog to collect values (reinstall mode)
+    setReinstallFlaggedTargets(
+      flaggedInstalls && flaggedInstalls.length > 0
+        ? flaggedInstalls
+        : [
+            {
+              id: installedServer.id,
+              name: installedServer.name,
+            },
+          ],
+    );
+
+    // Open the install dialog in reinstall mode whenever there are prompted
+    // fields the user owes values for — otherwise the simple "Reinstall
+    // Required" confirmation modal is enough. Filters mirror each dialog's
+    // own render filters so the two stay in sync; if they drift, the user
+    // can be left clicking a confirm dialog when they actually owe input.
+    const hasPromptedUserConfig = Object.values(
+      catalogItem.userConfig ?? {},
+    ).some((field) => field.promptOnInstallation !== false);
+
+    if (catalogItem.serverType === "local") {
+      const hasPromptedEnv =
+        !catalogItem.multitenant &&
+        (catalogItem.localConfig?.environment?.some(
+          (env) => env.promptOnInstallation !== false,
+        ) ??
+          false);
+
+      if (hasPromptedEnv || hasPromptedUserConfig) {
         setLocalServerCatalogItem(catalogItem);
         setReinstallServerId(installedServer.id);
         setReinstallServerTeamId(installedServer.teamId ?? null);
@@ -931,12 +1072,18 @@ export function InternalMCPCatalog({
         );
         openDialog("local-install");
       } else {
-        // No prompted env vars - still confirm before reinstalling
         setCatalogItemForReinstall(catalogItem);
         openDialog("reinstall");
       }
+    } else if (hasPromptedUserConfig) {
+      setSelectedCatalogItem(catalogItem);
+      setReinstallServerId(installedServer.id);
+      setReinstallServerTeamId(installedServer.teamId ?? null);
+      setReinstallServerScope(
+        (installedServer as unknown as { scope?: McpServerInstallScope }).scope,
+      );
+      openDialog("remote-install");
     } else {
-      // Remote server - show confirmation dialog (may need OAuth re-auth)
       setCatalogItemForReinstall(catalogItem);
       openDialog("reinstall");
     }
@@ -945,45 +1092,73 @@ export function InternalMCPCatalog({
   const handleReinstallConfirm = async () => {
     if (!catalogItemForReinstall) return;
 
-    const installedServer =
-      catalogItemForReinstall.serverType === "local" && currentUserId
-        ? installedServers?.find(
-            (server) =>
-              server.catalogId === catalogItemForReinstall.id &&
-              server.ownerId === currentUserId,
+    // Resolve targets. If the card passed flagged ids, reinstall every one of
+    // them; otherwise fall back to the parent install only.
+    const targets =
+      reinstallFlaggedTargets.length > 0
+        ? (installedServers ?? []).filter((s) =>
+            reinstallFlaggedTargets.some((t) => t.id === s.id),
           )
-        : installedServers?.find(
-            (server) => server.catalogId === catalogItemForReinstall.id,
-          );
+        : (() => {
+            const fallback =
+              catalogItemForReinstall.serverType === "local" && currentUserId
+                ? installedServers?.find(
+                    (server) =>
+                      server.catalogId === catalogItemForReinstall.id &&
+                      server.ownerId === currentUserId,
+                  )
+                : installedServers?.find(
+                    (server) => server.catalogId === catalogItemForReinstall.id,
+                  );
+            return fallback ? [fallback] : [];
+          })();
 
-    if (!installedServer) {
+    if (targets.length === 0) {
       toast.error("Server not found, cannot reinstall");
       closeDialog("reinstall");
       setCatalogItemForReinstall(null);
+      setReinstallFlaggedTargets([]);
       return;
     }
 
     closeDialog("reinstall");
 
-    // Reinstall directly after explicit confirmation
     setInstallingItemId(catalogItemForReinstall.id);
-    setInstallingServerIds((prev) => new Set(prev).add(installedServer.id));
+    setInstallingServerIds((prev) => {
+      const next = new Set(prev);
+      for (const t of targets) next.add(t.id);
+      return next;
+    });
+
     try {
-      await reinstallMutation.mutateAsync({
-        id: installedServer.id,
-        name: catalogItemForReinstall.name,
-      });
+      await Promise.all(
+        targets.map((t) =>
+          reinstallMutation.mutateAsync({
+            id: t.id,
+            name: t.name,
+          }),
+        ),
+      );
+      if (pendingCatalogReinstallId) {
+        await reinstallCatalogMutation.mutateAsync(pendingCatalogReinstallId);
+      }
     } finally {
-      // Clear installing state whether success or error
       setInstallingItemId(null);
       setInstallingServerIds((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(installedServer.id);
-        return newSet;
+        const next = new Set(prev);
+        for (const t of targets) next.delete(t.id);
+        return next;
       });
+      setCatalogItemForReinstall(null);
+      setReinstallFlaggedTargets([]);
+      setPendingCatalogReinstallId(null);
     }
+  };
 
-    setCatalogItemForReinstall(null);
+  const handleClone = (item: CatalogItem) => {
+    setCloneValues(buildCloneFormValues(item));
+    setCloneSourceId(item.id);
+    openDialog("create");
   };
 
   const handleCancelInstallation = (serverId: string) => {
@@ -992,6 +1167,28 @@ export function InternalMCPCatalog({
       const newSet = new Set(prev);
       newSet.delete(serverId);
       return newSet;
+    });
+  };
+
+  const handleRestartPodsStarted = (serverIds: string[]) => {
+    if (serverIds.length === 0) return;
+    setRestartingServerIds((prev) => {
+      const next = new Set(prev);
+      for (const serverId of serverIds) {
+        next.add(serverId);
+      }
+      return next;
+    });
+  };
+
+  const handleRestartPodsFailed = (serverIds: string[]) => {
+    if (serverIds.length === 0) return;
+    setRestartingServerIds((prev) => {
+      const next = new Set(prev);
+      for (const serverId of serverIds) {
+        next.delete(serverId);
+      }
+      return next;
     });
   };
 
@@ -1179,12 +1376,17 @@ export function InternalMCPCatalog({
                         ? handleInstallPlaywright(item)
                         : handleInstallLocalServer(item)
                     }
-                    onReinstall={() => handleReinstall(item)}
+                    onReinstall={(flagged, options) =>
+                      handleReinstall(item, flagged, options)
+                    }
                     onEdit={() => setEditingItem(item)}
                     onDetails={() => {
                       setDetailsServerName(item.name);
                     }}
                     onDelete={() => setDeletingItem(item)}
+                    onClone={() => handleClone(item)}
+                    onRestartPodsStarted={handleRestartPodsStarted}
+                    onRestartPodsFailed={handleRestartPodsFailed}
                     onCancelInstallation={handleCancelInstallation}
                     onAddPersonalConnection={() =>
                       handleAddPersonalConnection(item)
@@ -1237,12 +1439,17 @@ export function InternalMCPCatalog({
                         ? handleInstallPlaywright(item)
                         : handleInstallLocalServer(item)
                     }
-                    onReinstall={() => handleReinstall(item)}
+                    onReinstall={(flagged, options) =>
+                      handleReinstall(item, flagged, options)
+                    }
                     onEdit={() => setEditingItem(item)}
                     onDetails={() => {
                       setDetailsServerName(item.name);
                     }}
                     onDelete={() => setDeletingItem(item)}
+                    onClone={() => handleClone(item)}
+                    onRestartPodsStarted={handleRestartPodsStarted}
+                    onRestartPodsFailed={handleRestartPodsFailed}
                     onCancelInstallation={handleCancelInstallation}
                     onAddPersonalConnection={() =>
                       handleAddPersonalConnection(item)
@@ -1285,7 +1492,13 @@ export function InternalMCPCatalog({
 
       <CreateCatalogDialog
         isOpen={isDialogOpened("create")}
-        onClose={() => closeDialog("create")}
+        cloneValues={cloneValues ?? undefined}
+        clonedFrom={cloneSourceId ?? undefined}
+        onClose={() => {
+          setCloneValues(null);
+          setCloneSourceId(null);
+          closeDialog("create");
+        }}
         onSuccess={(createdItem) => {
           // Auto-open the appropriate install dialog based on server type
           if (createdItem.serverType === "local") {
@@ -1318,7 +1531,21 @@ export function InternalMCPCatalog({
               serverInfo.installedServer?.reinstallRequired &&
               !isInErrorState
             ) {
-              handleReinstall(item);
+              // If the same edit also set catalogReinstallRequired (multi-tenant
+              // local catalog whose execution config changed), chain the catalog
+              // reinstall after the per-install one — otherwise the admin would
+              // see the catalog Reinstall button reappear and have to click it
+              // separately.
+              const alsoReinstallCatalog =
+                item.multitenant === true &&
+                item.catalogReinstallRequired === true;
+              handleReinstall(
+                item,
+                undefined,
+                alsoReinstallCatalog
+                  ? { alsoReinstallCatalog: true }
+                  : undefined,
+              );
             }
           }
         }}
@@ -1334,13 +1561,6 @@ export function InternalMCPCatalog({
       <DeleteCatalogDialog
         item={deletingItem}
         onClose={() => setDeletingItem(null)}
-        installationCount={
-          deletingItem
-            ? installedServers?.filter(
-                (server) => server.catalogId === deletingItem.id,
-              ).length || 0
-            : 0
-        }
       />
 
       <RemoteServerInstallDialog
@@ -1349,14 +1569,24 @@ export function InternalMCPCatalog({
           closeDialog("remote-install");
           setSelectedCatalogItem(null);
           setReauthServerId(null);
+          setReinstallServerId(null);
+          setReinstallServerTeamId(null);
+          setReinstallServerScope(undefined);
           setPreselectedTeamId(null);
           setInstallPersonalOnly(false);
           setInstallOrgOnly(false);
         }}
         onConfirm={handleRemoteServerInstallConfirm}
         catalogItem={selectedCatalogItem}
-        isInstalling={installMutation.isPending || reauthMutation.isPending}
+        isInstalling={
+          installMutation.isPending ||
+          reauthMutation.isPending ||
+          reinstallMutation.isPending
+        }
         isReauth={!!reauthServerId}
+        isReinstall={!!reinstallServerId && !reauthServerId}
+        existingTeamId={reinstallServerTeamId}
+        existingScope={reinstallServerScope}
         preselectedTeamId={preselectedTeamId}
         personalOnly={installPersonalOnly}
         orgOnly={installOrgOnly}
@@ -1390,10 +1620,12 @@ export function InternalMCPCatalog({
         onClose={() => {
           closeDialog("reinstall");
           setCatalogItemForReinstall(null);
+          setReinstallFlaggedTargets([]);
         }}
         onConfirm={handleReinstallConfirm}
         serverName={catalogItemForReinstall?.name || ""}
         isReinstalling={reinstallMutation.isPending}
+        targets={reinstallFlaggedTargets}
       />
 
       <NoAuthInstallDialog

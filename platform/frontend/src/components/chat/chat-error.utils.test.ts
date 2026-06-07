@@ -1,4 +1,8 @@
-import { ChatErrorCode, ChatErrorMessages, RetryableErrorCodes } from "@shared";
+import {
+  ChatErrorCode,
+  ChatErrorMessages,
+  RetryableErrorCodes,
+} from "@archestra/shared";
 import { describe, expect, it } from "vitest";
 import {
   AI_SDK_INTERNAL_TYPES,
@@ -220,6 +224,46 @@ describe("chat-error.utils", () => {
         code: ChatErrorCode.Unknown,
         message: "Request failed",
         isRetryable: RetryableErrorCodes.has(ChatErrorCode.Unknown),
+      });
+    });
+
+    it("maps api_payload_too_large_error to InvalidRequest with backend message", () => {
+      const backendMessage =
+        "Request body too large: 65.0 MB (limit 50 MB). Use a smaller attachment, or raise ARCHESTRA_API_BODY_LIMIT.";
+      expect(
+        mapClientError(
+          new Error(
+            JSON.stringify({
+              error: {
+                message: backendMessage,
+                type: "api_payload_too_large_error",
+              },
+            }),
+          ),
+        ),
+      ).toEqual({
+        code: ChatErrorCode.InvalidRequest,
+        message: backendMessage,
+        isRetryable: RetryableErrorCodes.has(ChatErrorCode.InvalidRequest),
+      });
+    });
+
+    it("maps api_internal_server_error to retryable ServerError", () => {
+      expect(
+        mapClientError(
+          new Error(
+            JSON.stringify({
+              error: {
+                message: "Database connection failed",
+                type: "api_internal_server_error",
+              },
+            }),
+          ),
+        ),
+      ).toEqual({
+        code: ChatErrorCode.ServerError,
+        message: "Database connection failed",
+        isRetryable: RetryableErrorCodes.has(ChatErrorCode.ServerError),
       });
     });
   });

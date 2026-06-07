@@ -26,6 +26,8 @@ export const allAvailableActions: Record<Resource, Action[]> = {
 
   // Agents
   agent: ["read", "create", "update", "delete", "team-admin", "admin"],
+  skill: ["read", "create", "update", "delete", "team-admin", "admin"],
+  sandbox: ["execute"],
   agentTrigger: ["read", "create", "update", "delete"],
   scheduledTask: ["read", "create", "update", "delete", "admin"],
 
@@ -42,11 +44,14 @@ export const allAvailableActions: Record<Resource, Action[]> = {
   // MCP
   mcpGateway: ["read", "create", "update", "delete", "team-admin", "admin"],
   toolPolicy: ["read", "create", "update", "delete"],
-  mcpRegistry: ["read", "create", "update", "delete"],
+  mcpRegistry: ["read", "create", "update", "delete", "team-admin"],
   mcpServerInstallation: ["read", "create", "update", "delete", "admin"],
   mcpServerInstallationRequest: ["read", "create", "update", "delete", "admin"],
+  environment: ["admin", "deploy-to-restricted"],
+  githubAppConfig: ["read", "create", "update", "delete"],
 
   // Knowledge
+  knowledgeFile: ["read", "create", "update", "delete", "admin"],
   knowledgeSource: ["read", "create", "update", "delete", "query", "admin"],
 
   // Other
@@ -55,6 +60,8 @@ export const allAvailableActions: Record<Resource, Action[]> = {
 
   // Administration (overrides better-auth defaults to add "read" where needed)
   apiKey: ["read", "create", "delete"],
+  serviceAccount: ["read", "create", "update", "delete"],
+  auditLog: ["read"],
   agentSettings: ["read", "update"],
   llmSettings: ["read", "update"],
   knowledgeSettings: ["read", "update"],
@@ -72,6 +79,9 @@ export const allAvailableActions: Record<Resource, Action[]> = {
   chatProviderSettings: ["enable"],
   chatExpandToolCalls: ["enable"],
 
+  // Administration
+  siteNotification: ["read", "create", "update", "delete"],
+
   // better-auth internal resource — not exposed to users, kept for ACL compatibility
   organization: ["update", "delete"],
 };
@@ -79,6 +89,8 @@ export const allAvailableActions: Record<Resource, Action[]> = {
 export const editorPermissions: Record<Resource, Action[]> = {
   // Agents
   agent: ["read", "create", "update", "delete", "team-admin"],
+  skill: ["read", "create", "update", "delete", "team-admin"],
+  sandbox: ["execute"],
   agentTrigger: ["read", "create", "update", "delete"],
   scheduledTask: ["read", "create", "update", "delete"],
 
@@ -95,11 +107,14 @@ export const editorPermissions: Record<Resource, Action[]> = {
   // MCP
   mcpGateway: ["read", "create", "update", "delete", "team-admin"],
   toolPolicy: ["read", "create", "update", "delete"],
-  mcpRegistry: ["read", "create", "update", "delete"],
+  mcpRegistry: ["read", "create", "update", "delete", "team-admin"],
   mcpServerInstallation: ["read", "create", "update", "delete"],
   mcpServerInstallationRequest: ["read", "create", "update", "delete"],
+  environment: ["admin"],
+  githubAppConfig: ["read", "create", "update", "delete"],
 
   // Knowledge
+  knowledgeFile: ["read", "create", "update", "delete"],
   knowledgeSource: ["read", "create", "update", "delete", "query"],
 
   // Other
@@ -108,6 +123,8 @@ export const editorPermissions: Record<Resource, Action[]> = {
 
   // Administration (overrides better-auth defaults to add "read" where needed)
   apiKey: ["read", "create", "delete"],
+  serviceAccount: [],
+  auditLog: [],
   agentSettings: [],
   llmSettings: ["read", "update"],
   knowledgeSettings: ["read", "update"],
@@ -118,6 +135,9 @@ export const editorPermissions: Record<Resource, Action[]> = {
   identityProvider: ["read"],
   secret: ["read"],
   organizationSettings: ["read", "update"],
+
+  // Administration
+  siteNotification: ["read"],
 
   // UI behavior resources
   simpleView: [],
@@ -132,6 +152,8 @@ export const editorPermissions: Record<Resource, Action[]> = {
 export const memberPermissions: Record<Resource, Action[]> = {
   // Agents
   agent: ["read", "create", "update", "delete"],
+  skill: ["read", "create", "update", "delete"],
+  sandbox: ["execute"],
   agentTrigger: [],
   scheduledTask: ["read", "create", "update", "delete"],
 
@@ -151,8 +173,13 @@ export const memberPermissions: Record<Resource, Action[]> = {
   mcpRegistry: ["read"],
   mcpServerInstallation: ["read", "create", "delete"],
   mcpServerInstallationRequest: ["read", "create", "update"],
+  environment: [],
+  // minting installation tokens from a stored App credential is privileged;
+  // default members get no access — editors and admins manage/use App configs
+  githubAppConfig: [],
 
   // Knowledge
+  knowledgeFile: ["read"],
   knowledgeSource: ["read", "query"],
 
   // Other
@@ -161,6 +188,8 @@ export const memberPermissions: Record<Resource, Action[]> = {
 
   // Administration (overrides better-auth defaults to add "read" where needed)
   apiKey: ["read", "create", "delete"],
+  serviceAccount: [],
+  auditLog: [],
   agentSettings: [],
   llmSettings: [],
   knowledgeSettings: [],
@@ -171,6 +200,9 @@ export const memberPermissions: Record<Resource, Action[]> = {
   identityProvider: [],
   secret: [],
   organizationSettings: [],
+
+  // Administration
+  siteNotification: ["read"],
 
   // UI behavior resources
   simpleView: ["enable"],
@@ -210,6 +242,16 @@ export const permissionDescriptions: Record<string, string> = {
   "agent:team-admin": "Manage team assignments for agents",
   "agent:admin":
     "Full administrative control over all agents, bypassing team restrictions",
+  "skill:read":
+    "View and use agent skills within your scope (org, your teams, your own)",
+  "skill:create": "Create new agent skills",
+  "skill:update": "Modify agent skills and their team assignments",
+  "skill:delete": "Delete agent skills",
+  "skill:team-admin": "Manage team assignments for agent skills",
+  "skill:admin":
+    "Full administrative control over all agent skills, bypassing team restrictions",
+  "sandbox:execute":
+    "Run commands and upload/download files in code execution sandboxes",
   "agentTrigger:read":
     "View agent trigger configurations (Slack, MS Teams, email)",
   "agentTrigger:create": "Set up new agent triggers",
@@ -240,6 +282,7 @@ export const permissionDescriptions: Record<string, string> = {
   "mcpRegistry:create": "Add servers to the MCP registry",
   "mcpRegistry:update": "Modify MCP registry entries",
   "mcpRegistry:delete": "Remove servers from the MCP registry",
+  "mcpRegistry:team-admin": "Manage team assignments for MCP registry entries",
   "mcpServerInstallation:read": "View installed MCP servers and their status",
   "mcpServerInstallation:create": "Install MCP servers from the registry",
   "mcpServerInstallation:update": "Modify installed MCP server configuration",
@@ -253,6 +296,14 @@ export const permissionDescriptions: Record<string, string> = {
   "mcpServerInstallationRequest:delete": "Delete installation requests",
   "mcpServerInstallationRequest:admin":
     "Approve or decline installation requests",
+  "environment:admin":
+    "Create, edit, and delete deployment environments (everyone can view them)",
+  "environment:deploy-to-restricted":
+    "Deploy catalog items to restricted environments",
+  "githubAppConfig:read": "View GitHub App configurations",
+  "githubAppConfig:create": "Create GitHub App configurations",
+  "githubAppConfig:update": "Modify GitHub App configurations",
+  "githubAppConfig:delete": "Delete GitHub App configurations",
 
   // LLM
   "llmProxy:read": "View and list LLM proxies",
@@ -329,6 +380,12 @@ export const permissionDescriptions: Record<string, string> = {
   "apiKey:read": "View API keys",
   "apiKey:create": "Create API keys",
   "apiKey:delete": "Delete API keys",
+  "serviceAccount:read": "View service accounts",
+  "serviceAccount:create": "Create service accounts",
+  "serviceAccount:update": "Modify service accounts",
+  "serviceAccount:delete": "Delete service accounts",
+  "auditLog:read":
+    "View the organization-wide audit log of administrative actions",
   "organizationSettings:read":
     "View organization settings (appearance, authentication, etc)",
   "organizationSettings:update":
@@ -340,6 +397,12 @@ export const permissionDescriptions: Record<string, string> = {
   "knowledgeSource:query": "Query knowledge sources for information retrieval",
   "knowledgeSource:admin":
     "View all Knowledge Bases and Connectors, bypassing visibility restrictions",
+  "knowledgeFile:read": "View uploaded Knowledge Files",
+  "knowledgeFile:create": "Upload Knowledge Files",
+  "knowledgeFile:update": "Modify Knowledge File visibility and agent access",
+  "knowledgeFile:delete": "Delete Knowledge Files",
+  "knowledgeFile:admin":
+    "View all Knowledge Files, bypassing visibility restrictions",
   "knowledgeSettings:read":
     "View knowledge settings (embedding and reranking models)",
   "knowledgeSettings:update":
@@ -350,6 +413,12 @@ export const permissionDescriptions: Record<string, string> = {
   "chatAgentPicker:enable": "Show agent picker in chat",
   "chatProviderSettings:enable": "Show model and API key selectors in chat",
   "chatExpandToolCalls:enable": "Allow expanding tool call details in chat",
+
+  // Administration
+  "siteNotification:read": "View site-wide notifications",
+  "siteNotification:create": "Create new site notifications",
+  "siteNotification:update": "Modify site notifications",
+  "siteNotification:delete": "Delete site notifications",
 };
 
 /**
@@ -378,6 +447,7 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.CloneAgent]: {},
   [RouteId.UpdateAgent]: {},
   [RouteId.DeleteAgent]: {},
+  [RouteId.RestoreAgent]: {},
   // Export/Import: agent-type permission checked dynamically in handler
   [RouteId.ExportAgent]: {},
   [RouteId.ImportAgent]: {},
@@ -497,6 +567,12 @@ export const requiredEndpointPermissionsMap: Partial<
     mcpRegistry: ["read"],
   },
   [RouteId.UpdateInternalMcpCatalogItem]: {
+    mcpRegistry: ["update"],
+  },
+  [RouteId.ReinstallInternalMcpCatalogItem]: {
+    mcpRegistry: ["update"],
+  },
+  [RouteId.RefreshInternalMcpCatalogImage]: {
     mcpRegistry: ["update"],
   },
   [RouteId.DeleteInternalMcpCatalogItem]: {
@@ -661,11 +737,21 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.StopChatStream]: {
     chat: ["read"],
   },
+  [RouteId.GetActiveChatRun]: {
+    chat: ["read"],
+  },
   [RouteId.GetChatConversations]: {
     chat: ["read"],
   },
   [RouteId.GetChatConversation]: {
     chat: ["read"],
+  },
+  [RouteId.GetChatAttachmentContent]: {
+    chat: ["read"],
+  },
+  [RouteId.PromoteChatAttachmentToKnowledgeFile]: {
+    chat: ["read"],
+    knowledgeFile: ["create"],
   },
   [RouteId.GetChatAgentMcpTools]: {
     agent: ["read"],
@@ -681,6 +767,9 @@ export const requiredEndpointPermissionsMap: Partial<
   },
   [RouteId.DeleteChatConversation]: {
     chat: ["delete"],
+  },
+  [RouteId.CompactChatConversation]: {
+    chat: ["update"],
   },
   [RouteId.GenerateChatConversationTitle]: {
     chat: ["update"],
@@ -750,6 +839,30 @@ export const requiredEndpointPermissionsMap: Partial<
   },
   [RouteId.DeleteApiKey]: {
     apiKey: ["delete"],
+  },
+  [RouteId.GetServiceAccounts]: {
+    serviceAccount: ["read"],
+  },
+  [RouteId.GetServiceAccount]: {
+    serviceAccount: ["read"],
+  },
+  [RouteId.CreateServiceAccount]: {
+    serviceAccount: ["create"],
+  },
+  [RouteId.UpdateServiceAccount]: {
+    serviceAccount: ["update"],
+  },
+  [RouteId.DeleteServiceAccount]: {
+    serviceAccount: ["delete"],
+  },
+  [RouteId.CreateServiceAccountToken]: {
+    serviceAccount: ["update"],
+  },
+  [RouteId.UpdateServiceAccountToken]: {
+    serviceAccount: ["update"],
+  },
+  [RouteId.DeleteServiceAccountToken]: {
+    serviceAccount: ["update"],
   },
   [RouteId.GetAllVirtualApiKeys]: {
     llmVirtualKey: ["read"],
@@ -837,6 +950,38 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.UpdateConnectionSettings]: {
     organizationSettings: ["update"],
   },
+  // Listing environments is available to any authenticated user (read is ungated).
+  [RouteId.ListEnvironments]: {},
+  [RouteId.CreateEnvironment]: {
+    environment: ["admin"],
+  },
+  [RouteId.UpdateEnvironment]: {
+    environment: ["admin"],
+  },
+  [RouteId.DeleteEnvironment]: {
+    environment: ["admin"],
+  },
+  [RouteId.UpdateDefaultEnvironment]: {
+    environment: ["admin"],
+  },
+  [RouteId.GetK8sCapabilities]: {
+    environment: ["admin"],
+  },
+  [RouteId.ListGithubAppConfigs]: {
+    githubAppConfig: ["read"],
+  },
+  [RouteId.GetGithubAppConfig]: {
+    githubAppConfig: ["read"],
+  },
+  [RouteId.CreateGithubAppConfig]: {
+    githubAppConfig: ["create"],
+  },
+  [RouteId.UpdateGithubAppConfig]: {
+    githubAppConfig: ["update"],
+  },
+  [RouteId.DeleteGithubAppConfig]: {
+    githubAppConfig: ["delete"],
+  },
   [RouteId.UpdateKnowledgeSettings]: {
     knowledgeSettings: ["update"],
   },
@@ -898,8 +1043,10 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetUserPermissions]: {}, // User permissions route - available to all authenticated users (no specific permissions required)
   [RouteId.GetImpersonableUsers]: { member: ["update"] }, // Role debugger picker — admin-only (better-auth still gates the actual impersonate-user call)
 
-  // Member default agent routes - available to all authenticated users (manages their own default agent)
+  // Member default routes - available to all authenticated users (manages their own defaults)
   [RouteId.GetMemberDefaultAgent]: {},
+  [RouteId.GetMemberDefaultModel]: {},
+  [RouteId.UpdateMemberDefaultModel]: {},
 
   // User token routes - available to all authenticated users (manages their own personal token)
   [RouteId.GetUserToken]: {},
@@ -1021,8 +1168,11 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetConnectors]: { knowledgeSource: ["read"] },
   [RouteId.CreateConnector]: { knowledgeSource: ["create"] },
   [RouteId.GetConnector]: { knowledgeSource: ["read"] },
+  [RouteId.GetConnectorDocuments]: { knowledgeSource: ["read"] },
+  [RouteId.GetConnectorDocument]: { knowledgeSource: ["read"] },
   [RouteId.UpdateConnector]: { knowledgeSource: ["update"] },
   [RouteId.DeleteConnector]: { knowledgeSource: ["delete"] },
+  [RouteId.DeleteConnectorDocument]: { knowledgeSource: ["delete"] },
   [RouteId.SyncConnector]: { knowledgeSource: ["update"] },
   [RouteId.ForceResyncConnector]: { knowledgeSource: ["update"] },
   [RouteId.TestConnectorConnection]: { knowledgeSource: ["read"] },
@@ -1038,14 +1188,61 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetConnectorRuns]: { knowledgeSource: ["read"] },
   [RouteId.GetConnectorRun]: { knowledgeSource: ["read"] },
 
-  // Connector File Upload Routes
-  [RouteId.UploadConnectorFiles]: { knowledgeSource: ["update"] },
-  [RouteId.GetConnectorFiles]: { knowledgeSource: ["read"] },
-  [RouteId.GetConnectorFile]: { knowledgeSource: ["read"] },
-  [RouteId.DeleteConnectorFile]: { knowledgeSource: ["delete"] },
+  // Knowledge File Routes
+  [RouteId.GetKnowledgeFiles]: { knowledgeFile: ["read"] },
+  [RouteId.UploadKnowledgeFiles]: { knowledgeFile: ["create"] },
+  [RouteId.GetKnowledgeFile]: { knowledgeFile: ["read"] },
+  [RouteId.GetKnowledgeFileContent]: { knowledgeFile: ["read"] },
+  [RouteId.UpdateKnowledgeFile]: { knowledgeFile: ["update"] },
+  [RouteId.DeleteKnowledgeFile]: { knowledgeFile: ["delete"] },
+  [RouteId.GetKnowledgeFileUploadConfig]: { knowledgeFile: ["read"] },
+
+  // Agent Skill Routes - per-instance scope is enforced in the handlers
+  [RouteId.GetSkills]: { skill: ["read"] },
+  [RouteId.CreateSkill]: { skill: ["create"] },
+  [RouteId.ConvertAgentToSkill]: { skill: ["create"], agent: ["read"] },
+  // chat:read gates spending the agent's configured LLM key — the same gate
+  // every other resolveAgentLlmOrDefault path (chat, compaction) sits behind.
+  [RouteId.SuggestSkillDescription]: {
+    skill: ["create"],
+    agent: ["read"],
+    chat: ["read"],
+  },
+  [RouteId.GetSkill]: { skill: ["read"] },
+  [RouteId.UpdateSkill]: { skill: ["update"] },
+  [RouteId.DeleteSkill]: { skill: ["delete"] },
+  [RouteId.ResetSkill]: { skill: ["update"] },
+  [RouteId.DiscoverGithubSkills]: { skill: ["read"] },
+  [RouteId.SearchSkillCatalog]: { skill: ["read"] },
+  [RouteId.PreviewGithubSkill]: { skill: ["read"] },
+  [RouteId.ImportGithubSkills]: { skill: ["create"] },
+  [RouteId.GetSkillSourceRepos]: { skill: ["read"] },
+  [RouteId.EnableSkillToolDefaults]: { skill: ["admin"] },
+  // matches the `download_file` tool (sandbox:execute) that hands out this
+  // URL, so a role allowed to produce an artifact can also fetch it.
+  [RouteId.GetSkillSandboxArtifact]: { sandbox: ["execute"] },
+
+  // Audit Log Routes
+  [RouteId.GetAuditLogs]: {
+    auditLog: ["read"],
+  },
+
+  // Skill Share Link Routes - admin-only. Per-skill org-isolation enforced in handlers.
+  // The public marketplace git endpoint stays outside this map; it is allowlisted in
+  // the auth middleware (`SKILL_MARKETPLACE_PREFIX`), mirroring `MCP_GATEWAY_PREFIX`.
+  [RouteId.GetSkillShareLinks]: { skill: ["admin"] },
+  [RouteId.CreateSkillShareLink]: { skill: ["admin"] },
+  [RouteId.RevokeSkillShareLink]: { skill: ["admin"] },
 
   // Config endpoint - any authenticated user can access
   [RouteId.GetConfig]: {},
+
+  // Site Notification Routes
+  [RouteId.GetSiteNotification]: { siteNotification: ["read"] },
+  [RouteId.GetSiteNotificationSettings]: { siteNotification: ["read"] },
+  [RouteId.CreateSiteNotification]: { siteNotification: ["create"] },
+  [RouteId.UpdateSiteNotification]: { siteNotification: ["update"] },
+  [RouteId.DeleteSiteNotification]: { siteNotification: ["delete"] },
 
   // MCP Gateway Routes - available to all authenticated users
   [RouteId.McpGatewayGet]: {}, // Server discovery endpoint
@@ -1068,6 +1265,8 @@ export const requiredPagePermissionsMap: Record<string, Permissions> = {
   "/agents/triggers/slack": { agentTrigger: ["read"] },
   "/agents/triggers/ms-teams": { agentTrigger: ["read"] },
   "/agents/triggers/email": { agentTrigger: ["read"] },
+  "/agents/skills": { skill: ["read"] },
+  "/agents/skills/new": { skill: ["create"] },
   "/scheduled-tasks": { scheduledTask: ["read"] },
 
   // LLM
@@ -1095,22 +1294,27 @@ export const requiredPagePermissionsMap: Record<string, Permissions> = {
   // Logs
   "/llm/logs": { log: ["read"] },
   "/mcp/logs": { log: ["read"] },
+  "/audit/logs": { auditLog: ["read"] },
 
   // Knowledge
   "/knowledge/knowledge-bases": { knowledgeSource: ["read"] },
+  "/knowledge/files": { knowledgeFile: ["read"] },
   "/knowledge/connectors": { knowledgeSource: ["read"] },
 
   // Settings
   "/settings/account": {},
   "/settings/api-keys": { apiKey: ["read"] },
+  "/settings/service-accounts": { serviceAccount: ["read"] },
   "/settings/llm": { llmSettings: ["read"] },
   "/settings/agents": { agentSettings: ["read"] },
+  "/settings/environments": { environment: ["admin"] },
   "/settings/knowledge": { knowledgeSettings: ["read"] },
   "/settings/users": { member: ["read"] },
   "/settings/teams": { team: ["read"] },
   "/settings/roles": { ac: ["read"] },
   "/settings/identity-providers": { identityProvider: ["read"] },
   "/settings/secrets": { secret: ["read"] },
+  "/settings/integrations": { githubAppConfig: ["read"] },
+  "/settings/integrations/github-apps": { githubAppConfig: ["read"] },
   "/settings/organization": { organizationSettings: ["read"] },
-  "/settings/connection": { organizationSettings: ["read"] },
 };

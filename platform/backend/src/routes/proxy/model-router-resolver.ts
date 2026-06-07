@@ -2,8 +2,8 @@ import {
   isSupportedProvider,
   type SupportedProvider,
   SupportedProviders,
-} from "@shared";
-import { ModelModel } from "@/models";
+} from "@archestra/shared";
+import { LlmProviderApiKeyModelLinkModel, ModelModel } from "@/models";
 import { ApiError, type Model } from "@/types";
 
 export type ModelRouterResolution = {
@@ -14,7 +14,9 @@ export type ModelRouterResolution = {
 
 export async function resolveModelRoute(params: {
   requestedModel: string;
+  capability?: "text-chat" | "embeddings";
   allowedProviders?: Set<SupportedProvider>;
+  allowedApiKeyIds?: string[];
 }): Promise<ModelRouterResolution> {
   const requestedModel = params.requestedModel.trim();
   if (!requestedModel) {
@@ -33,18 +35,31 @@ export async function resolveModelRoute(params: {
       );
     }
 
-    const providerMatches = await ModelModel.findTextChatModelsByModelId({
-      modelId: explicit.modelId,
-      provider: explicit.provider,
-    });
+    const providerMatches =
+      params.capability === "embeddings"
+        ? await ModelModel.findEmbeddingModelsByModelId({
+            modelId: explicit.modelId,
+            provider: explicit.provider,
+          })
+        : await ModelModel.findTextChatModelsByModelId({
+            modelId: explicit.modelId,
+            provider: explicit.provider,
+          });
 
-    if (providerMatches.length === 1) {
-      return toResolution(providerMatches[0], requestedModel);
+    const accessibleMatches = params.allowedApiKeyIds
+      ? await filterModelsByLinkedApiKeys(
+          providerMatches,
+          params.allowedApiKeyIds,
+        )
+      : providerMatches;
+
+    if (accessibleMatches.length === 1) {
+      return toResolution(accessibleMatches[0], requestedModel);
     }
-    if (providerMatches.length > 1) {
+    if (accessibleMatches.length > 1) {
       throw new ApiError(
         500,
-        `Ambiguous model resolution: "${requestedModel}" matched ${providerMatches.length} models.`,
+        `Ambiguous model resolution: "${requestedModel}" matched ${accessibleMatches.length} models.`,
       );
     }
   }
@@ -92,6 +107,19 @@ function toResolution(
 function providerSortIndex(provider: SupportedProvider): number {
   const index = SupportedProviders.indexOf(provider);
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+async function filterModelsByLinkedApiKeys(
+  models: Model[],
+  apiKeyIds: string[],
+): Promise<Model[]> {
+  if (models.length === 0 || apiKeyIds.length === 0) {
+    return [];
+  }
+  const linked =
+    await LlmProviderApiKeyModelLinkModel.getModelsForApiKeyIds(apiKeyIds);
+  const linkedIds = new Set(linked.map(({ model }) => model.id));
+  return models.filter((model) => linkedIds.has(model.id));
 }
 
 export function sortRoutableModels(models: Model[]): Model[] {

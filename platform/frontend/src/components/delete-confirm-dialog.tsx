@@ -11,6 +11,7 @@ type DeleteConfirmDialogProps = {
   onConfirm: () => void;
   confirmLabel?: string;
   pendingLabel?: string;
+  confirmDisabled?: boolean;
 };
 
 export function DeleteConfirmDialog({
@@ -22,6 +23,7 @@ export function DeleteConfirmDialog({
   onConfirm,
   confirmLabel = "Delete",
   pendingLabel = "Deleting...",
+  confirmDisabled = false,
 }: DeleteConfirmDialogProps) {
   return (
     <FormDialog
@@ -38,10 +40,16 @@ export function DeleteConfirmDialog({
             return;
           }
           e.preventDefault();
+          if (isPending || confirmDisabled) {
+            return;
+          }
           onConfirm();
         }}
         onSubmit={(e) => {
           e.preventDefault();
+          if (isPending || confirmDisabled) {
+            return;
+          }
           onConfirm();
         }}
       >
@@ -53,7 +61,11 @@ export function DeleteConfirmDialog({
           >
             Cancel
           </Button>
-          <Button type="submit" variant="destructive" disabled={isPending}>
+          <Button
+            type="submit"
+            variant="destructive"
+            disabled={isPending || confirmDisabled}
+          >
             {isPending ? pendingLabel : confirmLabel}
           </Button>
         </DialogStickyFooter>

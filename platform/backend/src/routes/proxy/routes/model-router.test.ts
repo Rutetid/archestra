@@ -3,7 +3,7 @@ import {
   LLM_PROXY_OAUTH_SCOPE,
   SOURCE_HEADER,
   type SupportedProvider,
-} from "@shared";
+} from "@archestra/shared";
 import { eq } from "drizzle-orm";
 import Fastify from "fastify";
 import {
@@ -17,6 +17,7 @@ import {
   InteractionModel,
   LlmOauthClientModel,
   LlmProviderApiKeyModel,
+  LlmProviderApiKeyModelLinkModel,
   ModelModel,
   OAuthAccessTokenModel,
   OAuthClientModel,
@@ -69,7 +70,7 @@ function createFastifyApp() {
     return reply.status(500).send({
       error: {
         message,
-        type: "internal_server_error",
+        type: "api_internal_server_error",
       },
     });
   });
@@ -89,6 +90,7 @@ function createAzureTestClient() {
 async function upsertModel(params: {
   provider: SupportedProvider;
   modelId: string;
+  embeddingDimensions?: 768 | 1536 | 3072;
 }) {
   await ModelModel.upsert({
     externalId: `${params.provider}/${params.modelId}`,
@@ -96,6 +98,7 @@ async function upsertModel(params: {
     modelId: params.modelId,
     inputModalities: ["text"],
     outputModalities: ["text"],
+    embeddingDimensions: params.embeddingDimensions,
     customPricePerMillionInput: "2.50",
     customPricePerMillionOutput: "10.00",
     lastSyncedAt: new Date(),
@@ -126,6 +129,7 @@ async function createModelRouterVirtualKey(params: {
       provider: params.provider,
     },
   );
+  await linkAllProviderModelsToApiKey(params.provider, chatApiKey.id);
   return VirtualApiKeyModel.create({
     name: `${params.provider} model router virtual key`,
     expiresAt: params.expiresAt,
@@ -136,6 +140,17 @@ async function createModelRouterVirtualKey(params: {
       },
     ],
   });
+}
+
+async function linkAllProviderModelsToApiKey(
+  provider: SupportedProvider,
+  apiKeyId: string,
+) {
+  const models = await ModelModel.findAll({ provider });
+  await LlmProviderApiKeyModelLinkModel.linkModelsToApiKey(
+    apiKeyId,
+    models.map((m) => m.id),
+  );
 }
 
 const ROUTABLE_PROVIDER_CASES: Array<{
@@ -599,7 +614,7 @@ describe("model router proxy routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, response.body).toBe(200);
     const interactions = await InteractionModel.findAllPaginated(
       { limit: 10, offset: 0 },
       undefined,
@@ -609,6 +624,135 @@ describe("model router proxy routes", () => {
     );
     expect(interactions.data).toHaveLength(1);
     expect(interactions.data[0].source).toBe("model_router");
+  });
+
+  test("routes OpenAI embedding models through embeddings", async ({
+    makeAgent,
+    makeOrganization,
+    makeSecret,
+    makeLlmProviderApiKey,
+  }) => {
+    const app = createFastifyApp();
+    await app.register(modelRouterProxyRoutes);
+    const provider = "openai";
+    const modelId = "text-embedding-3-small";
+    await upsertModel({ provider, modelId, embeddingDimensions: 1536 });
+    const organization = await makeOrganization();
+    const { value } = await createModelRouterVirtualKey({
+      organizationId: organization.id,
+      provider,
+      makeSecret,
+      makeLlmProviderApiKey,
+      apiKeyValue: "sk-openai-embedding",
+    });
+    const agent = await makeAgent({
+      organizationId: organization.id,
+      name: "Model Router Embedding Agent",
+      agentType: "llm_proxy",
+    });
+
+    let capturedApiKey: string | undefined;
+    vi.mocked(openaiAdapterFactory.createClient).mockImplementation(
+      (apiKey) => {
+        capturedApiKey = apiKey;
+        return createOpenAiTestClient() as never;
+      },
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/model-router/${agent.id}/embeddings`,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${value}`,
+        "user-agent": "test-client",
+      },
+      payload: {
+        model: `${provider}:${modelId}`,
+        input: ["first", "second"],
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      object: "list",
+      model: modelId,
+      data: [
+        { object: "embedding", index: 0 },
+        { object: "embedding", index: 1 },
+      ],
+    });
+    expect(capturedApiKey).toBe("sk-openai-embedding");
+
+    const interactions = await InteractionModel.findAllPaginated(
+      { limit: 10, offset: 0 },
+      undefined,
+      undefined,
+      undefined,
+      { profileId: agent.id },
+    );
+    expect(interactions.data[0]).toMatchObject({
+      type: "openai:embeddings",
+      source: "model_router",
+      model: modelId,
+      inputTokens: 2,
+      outputTokens: 0,
+    });
+  });
+
+  test("lists embedding models but rejects them on chat completions", async ({
+    makeAgent,
+    makeOrganization,
+    makeSecret,
+    makeLlmProviderApiKey,
+  }) => {
+    const app = createFastifyApp();
+    await app.register(modelRouterProxyRoutes);
+    await upsertModel({
+      provider: "openai",
+      modelId: "text-embedding-3-small",
+      embeddingDimensions: 1536,
+    });
+    const organization = await makeOrganization();
+    const { value } = await createModelRouterVirtualKey({
+      organizationId: organization.id,
+      provider: "openai",
+      makeSecret,
+      makeLlmProviderApiKey,
+    });
+    const agent = await makeAgent({
+      organizationId: organization.id,
+      name: "Model Router Embedding List Agent",
+      agentType: "llm_proxy",
+    });
+
+    const modelsResponse = await app.inject({
+      method: "GET",
+      url: `/v1/model-router/${agent.id}/models`,
+      headers: {
+        authorization: `Bearer ${value}`,
+      },
+    });
+    const chatResponse = await app.inject({
+      method: "POST",
+      url: `/v1/model-router/${agent.id}/chat/completions`,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${value}`,
+        "user-agent": "test-client",
+      },
+      payload: {
+        model: "openai:text-embedding-3-small",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(modelsResponse.statusCode).toBe(200);
+    expect(modelsResponse.json().data).toEqual([
+      expect.objectContaining({ id: "openai:text-embedding-3-small" }),
+    ]);
+    expect(chatResponse.statusCode).toBe(404);
+    expect(chatResponse.json().error.message).toContain("not available");
   });
 
   test("routes requests authenticated with an LLM OAuth client access token issued from client credentials", async ({
@@ -628,6 +772,7 @@ describe("model router proxy routes", () => {
     const chatApiKey = await makeLlmProviderApiKey(organization.id, secret.id, {
       provider,
     });
+    await linkAllProviderModelsToApiKey(provider, chatApiKey.id);
     const agent = await makeAgent({
       organizationId: organization.id,
       name: "OAuth Client Model Router Agent",
@@ -836,7 +981,7 @@ describe("model router proxy routes", () => {
     const olderSecret = await makeSecret({
       secret: { apiKey: "sk-older-openai" },
     });
-    await LlmProviderApiKeyModel.create({
+    const olderKey = await LlmProviderApiKeyModel.create({
       organizationId: organization.id,
       secretId: olderSecret.id,
       name: "Older User OpenAI Key",
@@ -846,10 +991,11 @@ describe("model router proxy routes", () => {
       teamId: null,
       isPrimary: false,
     });
+    await linkAllProviderModelsToApiKey(provider, olderKey.id);
     const primarySecret = await makeSecret({
       secret: { apiKey: "sk-primary-openai" },
     });
-    await LlmProviderApiKeyModel.create({
+    const primaryKey = await LlmProviderApiKeyModel.create({
       organizationId: organization.id,
       secretId: primarySecret.id,
       name: "Primary User OpenAI Key",
@@ -859,6 +1005,7 @@ describe("model router proxy routes", () => {
       teamId: null,
       isPrimary: true,
     });
+    await linkAllProviderModelsToApiKey(provider, primaryKey.id);
     const agent = await makeAgent({
       organizationId: organization.id,
       name: "User OAuth Model Router Agent",
@@ -1010,6 +1157,7 @@ describe("model router proxy routes", () => {
     const chatApiKey = await makeLlmProviderApiKey(organization.id, secret.id, {
       provider: "openai",
     });
+    await linkAllProviderModelsToApiKey("openai", chatApiKey.id);
     const { value } = await VirtualApiKeyModel.create({
       providerApiKeys: [
         { provider: chatApiKey.provider, providerApiKeyId: chatApiKey.id },
@@ -1120,6 +1268,7 @@ describe("model router proxy routes", () => {
     const chatApiKey = await makeLlmProviderApiKey(organization.id, secret.id, {
       provider: "openai",
     });
+    await linkAllProviderModelsToApiKey("openai", chatApiKey.id);
     const {
       virtualKey: { id: virtualKeyId },
       value,
@@ -1190,6 +1339,7 @@ describe("model router proxy routes", () => {
       name: "Vertex AI",
       provider: "gemini",
     });
+    await linkAllProviderModelsToApiKey("gemini", systemKey.id);
     const { value } = await VirtualApiKeyModel.create({
       name: "model-router-gemini-system-vk",
       providerApiKeys: [{ provider: "gemini", providerApiKeyId: systemKey.id }],
@@ -1336,6 +1486,8 @@ describe("model router proxy routes", () => {
       groqSecret.id,
       { provider: "groq" },
     );
+    await linkAllProviderModelsToApiKey("openai", openaiKey.id);
+    await linkAllProviderModelsToApiKey("groq", groqKey.id);
     const { value } = await VirtualApiKeyModel.create({
       name: "model-router-openai-groq-vk",
       providerApiKeys: [
@@ -1509,6 +1661,8 @@ describe("model router proxy routes", () => {
       groqSecret.id,
       { provider: "groq" },
     );
+    await linkAllProviderModelsToApiKey("openai", openaiKey.id);
+    await linkAllProviderModelsToApiKey("groq", groqKey.id);
     const { value } = await VirtualApiKeyModel.create({
       name: "model-router-multi-vk",
       providerApiKeys: [
@@ -1676,5 +1830,62 @@ describe("model router proxy routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json().error.message).toContain("not mapped");
+  });
+
+  test("excludes models that exist for the mapped provider but are not linked to the virtual key's chat api key", async ({
+    makeAgent,
+    makeOrganization,
+    makeSecret,
+    makeLlmProviderApiKey,
+  }) => {
+    const app = createFastifyApp();
+    await app.register(modelRouterProxyRoutes);
+    await upsertModel({ provider: "groq", modelId: "llama-3.1-8b-instant" });
+    await upsertModel({ provider: "groq", modelId: "unlinked-model" });
+    const organization = await makeOrganization();
+    const { value } = await createModelRouterVirtualKey({
+      organizationId: organization.id,
+      provider: "groq",
+      makeSecret,
+      makeLlmProviderApiKey,
+    });
+    // Add a second model AFTER the virtual key so it's not linked
+    await upsertModel({ provider: "groq", modelId: "added-after-link" });
+    const agent = await makeAgent({
+      organizationId: organization.id,
+      name: "Unlinked Model Test Agent",
+      agentType: "llm_proxy",
+    });
+
+    const listResponse = await app.inject({
+      method: "GET",
+      url: `/v1/model-router/${agent.id}/models`,
+      headers: {
+        authorization: `Bearer ${value}`,
+      },
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    const listedIds = listResponse.json().data.map((m: { id: string }) => m.id);
+    expect(listedIds).toContain("groq:llama-3.1-8b-instant");
+    expect(listedIds).toContain("groq:unlinked-model");
+    expect(listedIds).not.toContain("groq:added-after-link");
+
+    const routeResponse = await app.inject({
+      method: "POST",
+      url: `/v1/model-router/${agent.id}/chat/completions`,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${value}`,
+        "user-agent": "test-client",
+      },
+      payload: {
+        model: "groq:added-after-link",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(routeResponse.statusCode).toBe(404);
+    expect(routeResponse.json().error.message).toContain("not available");
   });
 });

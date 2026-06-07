@@ -1,4 +1,4 @@
-import { archestraApiSdk, type Permissions } from "@shared";
+import { archestraApiSdk, type Permissions } from "@archestra/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,15 +9,14 @@ import { useArchestraHasPermission } from "./auth-provider";
 vi.mock("@/lib/clients/auth/auth-client", () => ({
   authClient: {
     getSession: vi.fn(),
-    useSession: vi.fn(),
     organization: {
       listMembers: vi.fn(),
     },
   },
 }));
 
-vi.mock("@shared", async () => {
-  const actual = await vi.importActual("@shared");
+vi.mock("@archestra/shared", async () => {
+  const actual = await vi.importActual("@archestra/shared");
   return {
     ...actual,
     archestraApiSdk: {
@@ -43,13 +42,12 @@ const createWrapper = () => {
 beforeEach(() => {
   vi.clearAllMocks();
 
-  // Default mock for authClient.useSession - returns authenticated state
-  vi.mocked(authClient.useSession).mockReturnValue({
+  vi.mocked(authClient.getSession).mockResolvedValue({
     data: {
       user: { id: "test-user", email: "test@example.com" },
       session: { id: "test-session" },
     },
-  } as ReturnType<typeof authClient.useSession>);
+  } as Awaited<ReturnType<typeof authClient.getSession>>);
 });
 
 describe("useArchestraHasPermission", () => {

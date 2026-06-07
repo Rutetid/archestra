@@ -1,7 +1,14 @@
 "use client";
 
-import { E2eTestId, type McpDeploymentStatusEntry } from "@shared";
-import { AlertCircle, PlugZap, RefreshCw, XIcon } from "lucide-react";
+import { E2eTestId, type McpDeploymentStatusEntry } from "@archestra/shared";
+import {
+  AlertCircle,
+  Copy,
+  PlugZap,
+  RefreshCw,
+  Trash2,
+  XIcon,
+} from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { McpCatalogIcon } from "@/components/mcp-catalog-icon";
 import { Button } from "@/components/ui/button";
@@ -31,7 +38,7 @@ import {
 import { EditCatalogContent } from "./edit-catalog-dialog";
 import { ManageUsersContent } from "./manage-users-dialog";
 import { McpLogsContent, type McpLogsTab } from "./mcp-logs-dialog";
-import type { CatalogItemWithOptionalLabel } from "./mcp-server-card";
+import type { CatalogItem } from "./mcp-server-card";
 import { YamlConfigContent } from "./yaml-config-dialog";
 
 type SettingsPage =
@@ -52,7 +59,7 @@ interface McpServerSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialPage?: SettingsPage;
-  item: CatalogItemWithOptionalLabel;
+  item: CatalogItem;
   variant: "remote" | "local" | "builtin";
   showConnections: boolean;
   connectionCount?: number;
@@ -79,8 +86,13 @@ interface McpServerSettingsDialogProps {
   onConnect?: () => void;
   // Reinstall
   needsReinstall?: boolean;
+  // Restart pods
+  onRestartPods?: () => void | Promise<void>;
+  isRestartingPods?: boolean;
   // Delete
   onDelete?: () => void;
+  // Clone
+  onClone?: () => void;
 }
 
 export type { SettingsPage };
@@ -132,7 +144,10 @@ export function McpServerSettingsDialog({
   hasPersonalConnection,
   onConnect,
   needsReinstall,
+  onRestartPods,
+  isRestartingPods = false,
   onDelete,
+  onClone,
 }: McpServerSettingsDialogProps) {
   const isBuiltin = variant === "builtin";
 
@@ -201,7 +216,26 @@ export function McpServerSettingsDialog({
     [guardDirty],
   );
 
-  const handleClose = () => onOpenChange(false);
+  // Funnels every close path through the dirty guard: Close X button
+  // (calls handleClose), Esc key, and outside-click (both produce
+  // onOpenChange(false) from Radix). Without this wrapper the guard
+  // only catches tab navigation, so a dirty config edit could be
+  // silently dropped by Esc, clicking outside, or the X button.
+  const handleCloseAttempt = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        onOpenChange(true);
+      } else {
+        guardDirty(() => onOpenChange(false));
+      }
+    },
+    [guardDirty, onOpenChange],
+  );
+
+  const handleClose = useCallback(
+    () => handleCloseAttempt(false),
+    [handleCloseAttempt],
+  );
 
   // Deployment summary for sidebar header
   const summary = computeDeploymentStatusSummary(
@@ -211,14 +245,12 @@ export function McpServerSettingsDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={handleCloseAttempt}>
         <DialogContent
           className="max-w-6xl h-[85vh] flex flex-row p-0 gap-0 overflow-hidden"
           showCloseButton={false}
         >
-          <DialogTitle className="sr-only">
-            {item.label || item.name} Settings
-          </DialogTitle>
+          <DialogTitle className="sr-only">{item.name} Settings</DialogTitle>
           <DialogDescription className="sr-only">
             Server settings and configuration
           </DialogDescription>
@@ -229,9 +261,9 @@ export function McpServerSettingsDialog({
               <div className="flex min-w-0 items-center gap-2.5">
                 <SidebarIcon icon={item.icon} catalogId={item.id} />
                 <div className="min-w-0 flex-1">
-                  <TruncatedTooltip content={item.label || item.name}>
+                  <TruncatedTooltip content={item.name}>
                     <div className="font-semibold text-sm truncate">
-                      {item.label || item.name}
+                      {item.name}
                     </div>
                   </TruncatedTooltip>
                   {summary && (
@@ -276,10 +308,10 @@ export function McpServerSettingsDialog({
             </div>
 
             {/* Footer actions */}
-            <div className="px-2 pb-3 flex flex-col gap-1.5">
+            <div className="border-t px-2 pt-3 pb-3 flex flex-col gap-1.5">
               {!hasPersonalConnection && onConnect && (
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
                   className="w-full justify-start"
                   onClick={() =>
@@ -302,6 +334,42 @@ export function McpServerSettingsDialog({
                   Reinstall
                 </Button>
               )}
+              {onRestartPods && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start gap-2"
+                  disabled={isRestartingPods}
+                  onClick={() =>
+                    guardDirty(() => {
+                      onOpenChange(false);
+                      onRestartPods();
+                    })
+                  }
+                >
+                  <RefreshCw
+                    className={cn(
+                      "h-4 w-4",
+                      isRestartingPods && "animate-spin",
+                    )}
+                  />
+                  Restart pods
+                </Button>
+              )}
+              {onClone && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start gap-2"
+                  onClick={() => {
+                    handleClose();
+                    onClone();
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                  Clone
+                </Button>
+              )}
               {onDelete && (
                 <Button
                   variant="ghost"
@@ -312,6 +380,7 @@ export function McpServerSettingsDialog({
                     onDelete();
                   }}
                 >
+                  <Trash2 className="h-4 w-4" />
                   Delete
                 </Button>
               )}
@@ -325,15 +394,17 @@ export function McpServerSettingsDialog({
               <h2 className="text-lg font-semibold">
                 {PAGE_TITLES[validPage]}
               </h2>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-xs opacity-70 hover:opacity-100"
-                onClick={handleClose}
-              >
-                <XIcon className="h-4 w-4" />
-                <span className="sr-only">Close</span>
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-xs opacity-70 hover:opacity-100"
+                  onClick={handleClose}
+                >
+                  <XIcon className="h-4 w-4" />
+                  <span className="sr-only">Close</span>
+                </Button>
+              </div>
             </div>
 
             {/* Content body */}
@@ -359,7 +430,7 @@ export function McpServerSettingsDialog({
                 <ManageUsersContent
                   isActive={open && validPage === "connections"}
                   onClose={handleClose}
-                  label={item.label || item.name}
+                  label={item.name}
                   catalogId={item.id}
                   onAddPersonalConnection={onAddPersonalConnection}
                   onAddSharedConnection={onAddSharedConnection}
@@ -383,7 +454,7 @@ export function McpServerSettingsDialog({
                   <div className="flex flex-col flex-1 min-h-0">
                     <McpLogsContent
                       isActive={open && isDebugPage}
-                      serverName={item.label || item.name}
+                      serverName={item.name}
                       installs={
                         item.multitenant
                           ? // Multi-tenant catalogs alias one pod; pick the
@@ -397,7 +468,7 @@ export function McpServerSettingsDialog({
                               return [
                                 {
                                   ...reporting,
-                                  name: item.label || item.name,
+                                  name: item.name,
                                   ownerEmail: null,
                                   teamDetails: null,
                                   scope: null,

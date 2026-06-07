@@ -15,10 +15,30 @@ const PAGE_CONFIG: Record<string, { title: string; description: string }> = {
     title: "API Keys",
     description: "Create and manage personal API keys for programmatic access.",
   },
+  "/settings/service-accounts": {
+    title: "Service Accounts",
+    description:
+      "Create and manage organization service accounts for programmatic access.",
+  },
   "/settings/agents": {
     title: "Agents",
     description:
       "Configure default agent behavior and agent-related platform settings.",
+  },
+  "/settings/integrations": {
+    title: "Integrations",
+    description:
+      "Connect external services and manage their stored credentials.",
+  },
+  "/settings/integrations/github-apps": {
+    title: "GitHub Apps",
+    description:
+      "Manage organization GitHub App credentials for connectors and skill imports.",
+  },
+  "/settings/environments": {
+    title: "Environments",
+    description:
+      "Manage deployment environments, namespaces, access, and network egress.",
   },
   "/settings/identity-providers": {
     title: "Identity Providers",
@@ -33,11 +53,6 @@ const PAGE_CONFIG: Record<string, { title: string; description: string }> = {
   "/settings/llm": {
     title: "LLM",
     description: "Configure platform-wide LLM defaults and behavior.",
-  },
-  "/settings/connection": {
-    title: "Connect page",
-    description:
-      'Control what other users see when getting connection instructions on the "Connect" page.',
   },
   "/settings/organization": {
     title: "Organization",
@@ -85,10 +100,12 @@ export default function SettingsLayout({
   const tabs = useSettingsTabs();
   const [actionButton, setActionButton] = useState<React.ReactNode>(null);
 
-  const config = PAGE_CONFIG[pathname] ?? {
-    title: "Settings",
-    description: "Configure your platform, teams, and integrations.",
-  };
+  const config = pathname.startsWith("/settings/service-accounts/")
+    ? PAGE_CONFIG["/settings/service-accounts"]
+    : (PAGE_CONFIG[pathname] ?? {
+        title: "Settings",
+        description: "Configure your platform, teams, and integrations.",
+      });
 
   const contextValue = useMemo(() => ({ setActionButton }), []);
 

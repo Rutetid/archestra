@@ -6,7 +6,8 @@ import {
   ARCHESTRA_MCP_CATALOG_ID,
   DEFAULT_APP_NAME,
   MEMBER_ROLE_NAME,
-} from "@shared";
+  type SupportedProvider,
+} from "@archestra/shared";
 import { beforeEach as baseBeforeEach, test as baseTest } from "vitest";
 import db, { schema } from "@/database";
 import {
@@ -22,6 +23,7 @@ import {
   ToolInvocationPolicyModel,
   ToolModel,
   TrustedDataPolicyModel,
+  VirtualApiKeyModel,
 } from "@/models";
 import type {
   Agent,
@@ -45,6 +47,7 @@ import type {
   InsertSession,
   InsertTeam,
   InsertUser,
+  InsertVirtualApiKey,
   KnowledgeBase,
   KnowledgeBaseConnector,
   OrganizationRole,
@@ -67,6 +70,7 @@ type MakeUserOverrides = Partial<
 interface TestFixtures {
   makeUser: typeof makeUser;
   makeAdmin: typeof makeAdmin;
+  makeVirtualApiKey: typeof makeVirtualApiKey;
   makeOrganization: typeof makeOrganization;
   makeTeam: typeof makeTeam;
   makeTeamMember: typeof makeTeamMember;
@@ -135,10 +139,38 @@ async function makeAdmin(overrides: MakeUserOverrides = {}) {
 }
 
 /**
+ * Creates a test virtual key in the database
+ */
+async function makeVirtualApiKey(
+  organizationId: string,
+  overrides: Partial<
+    Pick<InsertVirtualApiKey, "name" | "scope" | "authorId">
+  > & {
+    providerApiKeys?: {
+      provider: SupportedProvider;
+      providerApiKeyId: string;
+    }[];
+  } = {},
+) {
+  const result = await VirtualApiKeyModel.create({
+    organizationId,
+    name:
+      overrides.name ??
+      `Test Virtual Key ${crypto.randomUUID().substring(0, 8)}`,
+    scope: overrides.scope ?? "org",
+    authorId: overrides.authorId ?? null,
+    providerApiKeys: overrides.providerApiKeys ?? [],
+  });
+  return result.virtualKey;
+}
+
+/**
  * Creates a test organization in the database
  */
 async function makeOrganization(
-  overrides: Partial<Pick<InsertOrganization, "name" | "slug">> = {},
+  overrides: Partial<
+    Pick<InsertOrganization, "name" | "slug" | "globalToolPolicy">
+  > = {},
 ) {
   const orgId = crypto.randomUUID();
   const [org] = await db
@@ -148,7 +180,6 @@ async function makeOrganization(
       name: `Test Org ${orgId.substring(0, 8)}`,
       slug: `test-org-${orgId.substring(0, 8)}`,
       createdAt: new Date(),
-      limitCleanupInterval: null,
       theme: "cosmic-night",
       customFont: "lato",
       ...overrides,
@@ -501,11 +532,13 @@ async function makeInternalMcpCatalog(
       | "authDescription"
       | "authFields"
       | "localConfig"
+      | "localConfigSecretId"
       | "userConfig"
       | "oauthConfig"
       | "enterpriseManagedConfig"
       | "scope"
       | "teams"
+      | "clonedFrom"
     >
   > & {
     organizationId?: string;
@@ -643,7 +676,7 @@ async function makeConversation(
   overrides: Partial<
     Pick<
       InsertConversation,
-      "userId" | "organizationId" | "title" | "selectedModel" | "chatApiKeyId"
+      "userId" | "organizationId" | "title" | "modelId" | "chatApiKeyId"
     >
   > = {},
 ) {
@@ -655,7 +688,6 @@ async function makeConversation(
       organizationId: `org-${crypto.randomUUID().substring(0, 8)}`,
       agentId,
       title: `Test Conversation ${crypto.randomUUID().substring(0, 8)}`,
-      selectedModel: "gpt-4o",
       createdAt: new Date(),
       updatedAt: new Date(),
       ...overrides,
@@ -1133,6 +1165,9 @@ export const test = baseTest.extend<TestFixtures>({
   },
   makeLlmProviderApiKey: async ({}, use) => {
     await use(makeLlmProviderApiKey);
+  },
+  makeVirtualApiKey: async ({}, use) => {
+    await use(makeVirtualApiKey);
   },
   makeIdentityProvider: async ({}, use) => {
     await use(makeIdentityProvider);

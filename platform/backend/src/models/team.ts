@@ -1,4 +1,4 @@
-import { MEMBER_ROLE_NAME } from "@shared";
+import { MEMBER_ROLE_NAME } from "@archestra/shared";
 import { and, count, eq, getTableColumns, ilike, inArray } from "drizzle-orm";
 import db, { schema } from "@/database";
 import logger from "@/logging";
@@ -422,6 +422,32 @@ class TeamModel {
       "TeamModel.getUserTeams: completed",
     );
     return teamsWithMembers;
+  }
+
+  /**
+   * Get the teams a user belongs to within a single organization. Unlike
+   * {@link getUserTeams}, this is scoped to one org, so callers that render
+   * user context into prompts (templated skills, agent system prompts) cannot
+   * leak team names from the user's other organizations.
+   */
+  static async getUserTeamsForOrganization(params: {
+    userId: string;
+    organizationId: string;
+  }): Promise<Team[]> {
+    const { userId, organizationId } = params;
+    return db
+      .select(getTableColumns(schema.teamsTable))
+      .from(schema.teamsTable)
+      .innerJoin(
+        schema.teamMembersTable,
+        eq(schema.teamMembersTable.teamId, schema.teamsTable.id),
+      )
+      .where(
+        and(
+          eq(schema.teamMembersTable.userId, userId),
+          eq(schema.teamsTable.organizationId, organizationId),
+        ),
+      );
   }
 
   /**
@@ -1033,6 +1059,43 @@ class TeamModel {
     if (!isMember) {
       throw new ApiError(403, "Not authorized to access this team");
     }
+  }
+
+  static async findByIdForAudit(
+    id: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const [team] = await db
+      .select()
+      .from(schema.teamsTable)
+      .where(
+        and(
+          eq(schema.teamsTable.id, id),
+          eq(schema.teamsTable.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!team) return null;
+
+    // Fetch relational data (members and external groups) to provide a complete
+    // picture in the audit log diff.
+    const [members, externalGroups] = await Promise.all([
+      TeamModel.getTeamMembersWithUsers(id),
+      TeamModel.getExternalGroups(id),
+    ]);
+
+    return {
+      id: team.id,
+      name: team.name,
+      description: team.description ?? null,
+      organizationId: team.organizationId,
+      members: members.map((m) => `${m.name} (${m.email})`).sort(),
+      externalGroups: externalGroups.map((g) => g.groupIdentifier).sort(),
+      createdBy: team.createdBy,
+      createdAt: team.createdAt.toISOString(),
+      updatedAt: team.updatedAt.toISOString(),
+    };
   }
 }
 

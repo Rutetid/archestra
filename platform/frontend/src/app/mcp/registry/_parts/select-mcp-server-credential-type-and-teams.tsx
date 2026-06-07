@@ -1,6 +1,6 @@
 "use client";
 
-import { E2eTestId } from "@shared";
+import { E2eTestId } from "@archestra/shared";
 import { AlertTriangle, Globe, Lock, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -16,12 +16,18 @@ import {
   type VisibilityOption,
   VisibilitySelector,
 } from "@/components/visibility-selector";
-import { useHasPermissions } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { useMcpServers } from "@/lib/mcp/mcp-server.query";
 import { useTeams } from "@/lib/teams/team.query";
 
 export type McpServerInstallScope = "personal" | "team" | "org";
+
+type InstallScopeOption = {
+  value: McpServerInstallScope;
+  label: string;
+  disabled: boolean;
+  disabledReason?: string;
+};
 
 interface SelectMcpServerCredentialTypeAndTeamsProps {
   onTeamChange: (teamId: string | null) => void;
@@ -62,7 +68,7 @@ export function SelectMcpServerCredentialTypeAndTeams({
 }: SelectMcpServerCredentialTypeAndTeamsProps) {
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const { data: installedServers } = useMcpServers();
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const currentUserId = session?.user?.id;
 
   // WHY: Check mcpServer:update permission to determine if user can create team installations
@@ -186,49 +192,12 @@ export function SelectMcpServerCredentialTypeAndTeams({
     onCanInstallChange?.(canInstall);
   }, [canInstall, onCanInstallChange]);
 
-  useEffect(() => {
-    if (isReinstall) {
-      onScopeChange?.(initialScope);
-      onTeamChange(initialScope === "team" ? (existingTeamId ?? null) : null);
-      return;
-    }
-
-    if (hasPersonalInstallation && scope === "personal") {
-      if (availableTeams.length > 0) {
-        setScope("team");
-        setSelectedTeamId(availableTeams[0].id);
-        onScopeChange?.("team");
-        onTeamChange(availableTeams[0].id);
-        return;
-      }
-      if (!isOrgDisabled) {
-        setScope("org");
-        setSelectedTeamId(null);
-        onScopeChange?.("org");
-        onTeamChange(null);
-        return;
-      }
-    }
-
-    onScopeChange?.(scope);
-    onTeamChange(scope === "team" ? selectedTeamId : null);
-  }, [
-    isReinstall,
-    initialScope,
-    existingTeamId,
-    hasPersonalInstallation,
-    availableTeams,
-    scope,
-    selectedTeamId,
-    isOrgDisabled,
-    onScopeChange,
-    onTeamChange,
-  ]);
-
   const visibilityOptions = useMemo<
-    Array<VisibilityOption<McpServerInstallScope>>
+    Array<InstallScopeOption & VisibilityOption<McpServerInstallScope>>
   >(() => {
-    const options: Array<VisibilityOption<McpServerInstallScope>> = [];
+    const options: Array<
+      InstallScopeOption & VisibilityOption<McpServerInstallScope>
+    > = [];
 
     if (!teamOnly) {
       options.push({
@@ -293,6 +262,51 @@ export function SelectMcpServerCredentialTypeAndTeams({
     hasOrgInstallation,
   ]);
 
+  useEffect(() => {
+    if (isReinstall) {
+      onScopeChange?.(initialScope);
+      onTeamChange(initialScope === "team" ? (existingTeamId ?? null) : null);
+      return;
+    }
+
+    // Self-heal: if the current scope is disabled (e.g. personal already
+    // installed, team option needs a permission the user lacks, etc.), pick
+    // the first enabled option. Without this, the SelectValue trigger shows
+    // empty because the matching SelectItem is wrapped in a div for the
+    // disabledReason tooltip and Radix can't resolve its label.
+    const currentOption = visibilityOptions.find((o) => o.value === scope);
+    if (currentOption?.disabled) {
+      const firstEnabled = visibilityOptions.find((o) => !o.disabled);
+      if (firstEnabled && firstEnabled.value !== scope) {
+        setScope(firstEnabled.value);
+        if (firstEnabled.value === "team") {
+          const firstTeam = availableTeams[0]?.id ?? null;
+          setSelectedTeamId(firstTeam);
+          onScopeChange?.("team");
+          onTeamChange(firstTeam);
+        } else {
+          setSelectedTeamId(null);
+          onScopeChange?.(firstEnabled.value);
+          onTeamChange(null);
+        }
+        return;
+      }
+    }
+
+    onScopeChange?.(scope);
+    onTeamChange(scope === "team" ? selectedTeamId : null);
+  }, [
+    isReinstall,
+    initialScope,
+    existingTeamId,
+    visibilityOptions,
+    availableTeams,
+    scope,
+    selectedTeamId,
+    onScopeChange,
+    onTeamChange,
+  ]);
+
   const handleScopeChange = (next: McpServerInstallScope) => {
     setScope(next);
     if (next === "team") {
@@ -318,7 +332,7 @@ export function SelectMcpServerCredentialTypeAndTeams({
     );
   }
 
-  // When personalOnly, orgOnly, or preselectedTeamId, skip the selector
+  // When personalOnly, orgOnly, or preselectedTeamId, skip the scope selector
   // entirely — scope is fixed.
   if (personalOnly || orgOnly || preselectedTeamId) {
     return null;

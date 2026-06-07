@@ -1,7 +1,6 @@
 "use client";
 
-import { archestraApiSdk, type archestraApiTypes, E2eTestId } from "@shared";
-import { useQuery } from "@tanstack/react-query";
+import { type archestraApiTypes, E2eTestId } from "@archestra/shared";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -13,6 +12,7 @@ import { AgentIcon } from "@/components/agent-icon";
 import { AgentNameCell } from "@/components/agent-name-cell";
 import {
   ActiveFilterBadges,
+  AgentDeletedStatusFilter,
   AgentScopeFilter,
 } from "@/components/agent-scope-filter";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
@@ -37,11 +37,12 @@ import {
   useDeleteProfile,
   useProfile,
   useProfilesPaginated,
+  useRestoreProfile,
 } from "@/lib/agent.query";
-import { useHasPermissions } from "@/lib/auth/auth.query";
-import { authClient } from "@/lib/clients/auth/auth-client";
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { getFrontendDocsUrl } from "@/lib/docs/docs";
 import { useDataTableQueryParams } from "@/lib/hooks/use-data-table-query-params";
+import { useTeams } from "@/lib/teams/team.query";
 import { McpGatewayActions } from "./mcp-gateway-actions";
 
 type McpGatewaysInitialData = {
@@ -123,12 +124,20 @@ function McpGateways({
   const authorIdsFromUrl = searchParams.get("authorIds");
   const excludeAuthorIdsFromUrl = searchParams.get("excludeAuthorIds");
   const labelsFromUrl = searchParams.get("labels");
+  const statusFromUrl = searchParams.get("status") as
+    | "active"
+    | "deleted"
+    | null;
+  const isDeletedView = statusFromUrl === "deleted";
 
   const sortBy = sortByFromUrl || DEFAULT_SORT_BY;
   const sortDirection = sortDirectionFromUrl || DEFAULT_SORT_DIRECTION;
   const { data: canReadAgents } = useHasPermissions({ agent: ["read"] });
+  const { data: canDeleteAgents } = useHasPermissions({ agent: ["delete"] });
   const gatewayAgentTypes: Array<"mcp_gateway" | "profile"> = canReadAgents
-    ? ["mcp_gateway", "profile"]
+    ? isDeletedView && !canDeleteAgents
+      ? ["mcp_gateway"]
+      : ["mcp_gateway", "profile"]
     : ["mcp_gateway"];
 
   const { data: agentsResponse, isPending } = useProfilesPaginated({
@@ -152,17 +161,11 @@ function McpGateways({
         ? true
         : undefined,
     labels: labelsFromUrl || undefined,
+    status: statusFromUrl || undefined,
   });
   const { data: canReadTeams } = useHasPermissions({ team: ["read"] });
 
-  const { data: userTeams } = useQuery({
-    queryKey: ["teams"],
-    queryFn: async () => {
-      const { data } = await archestraApiSdk.getTeams({
-        query: { limit: 100, offset: 0 },
-      });
-      return data?.data || [];
-    },
+  const { data: userTeams } = useTeams({
     initialData: initialData?.teams,
     enabled: !!canReadTeams,
   });
@@ -171,7 +174,7 @@ function McpGateways({
   const { data: isTeamAdmin } = useHasPermissions({
     mcpGateway: ["team-admin"],
   });
-  const { data: session } = authClient.useSession();
+  const { data: session } = useSession();
   const currentUserId = session?.user?.id;
   const userTeamIdSet = new Set((userTeams ?? []).map((t) => t.id));
 
@@ -223,6 +226,7 @@ function McpGateways({
   const [deletingGatewayId, setDeletingGatewayId] = useState<string | null>(
     null,
   );
+  const restoreGateway = useRestoreProfile();
 
   const handleSortingChange = useCallback(
     (updater: SortingState | ((old: SortingState) => SortingState)) => {
@@ -406,6 +410,14 @@ function McpGateways({
               setEditingGateway(agentData);
             }}
             onDelete={setDeletingGatewayId}
+            onRestore={(agentId) => {
+              restoreGateway.mutate(agentId, {
+                onSuccess: (data) => {
+                  if (!data) return;
+                  toast.success("MCP Gateway restored successfully");
+                },
+              });
+            }}
           />
         );
       },
@@ -458,6 +470,9 @@ function McpGateways({
                   paramName="name"
                 />
                 <AgentScopeFilter ownerLabelPlural="MCP gateways" />
+                <AgentDeletedStatusFilter
+                  deletePermission={{ mcpGateway: ["delete"] }}
+                />
               </div>
               {!canReadTeams && (
                 <PermissionRequirementHint
@@ -488,7 +503,8 @@ function McpGateways({
                     teamIdsFromUrl ||
                     authorIdsFromUrl ||
                     excludeAuthorIdsFromUrl ||
-                    labelsFromUrl,
+                    labelsFromUrl ||
+                    isDeletedView,
                 )}
                 onClearFilters={() =>
                   updateQueryParams({
@@ -498,10 +514,20 @@ function McpGateways({
                     authorIds: null,
                     excludeAuthorIds: null,
                     labels: null,
+                    status: null,
                     page: "1",
                   })
                 }
-                emptyMessage="No MCP gateways found"
+                emptyMessage={
+                  isDeletedView
+                    ? "No deleted MCP gateways found"
+                    : "No MCP gateways found"
+                }
+                filteredEmptyMessage={
+                  isDeletedView
+                    ? "No deleted MCP gateways found."
+                    : "No MCP gateways match your filters. Try adjusting your search."
+                }
               />
             </div>
 

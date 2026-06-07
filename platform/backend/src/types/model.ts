@@ -3,7 +3,7 @@ import {
   ModelOutputModalitySchema,
   SupportedEmbeddingDimensionsSchema,
   SupportedProvidersSchema,
-} from "@shared";
+} from "@archestra/shared";
 import {
   createInsertSchema,
   createSelectSchema,
@@ -12,9 +12,15 @@ import {
 import { z } from "zod";
 import { schema } from "@/database";
 
-export type { ModelInputModality, ModelOutputModality } from "@shared";
-// Re-export modality schemas and types from @shared for convenience
-export { ModelInputModalitySchema, ModelOutputModalitySchema } from "@shared";
+export type {
+  ModelInputModality,
+  ModelOutputModality,
+} from "@archestra/shared";
+// Re-export modality schemas and types from @archestra/shared for convenience
+export {
+  ModelInputModalitySchema,
+  ModelOutputModalitySchema,
+} from "@archestra/shared";
 
 /**
  * Fields to extend for drizzle-zod schema generation.
@@ -184,8 +190,6 @@ export type LinkedApiKey = z.infer<typeof LinkedApiKeySchema>;
  * Schema for model with linked API keys (for settings page display)
  */
 export const ModelWithApiKeysSchema = SelectModelSchema.extend({
-  /** Whether this model is marked as the fastest (lowest latency) for any linked API key */
-  isFastest: z.boolean(),
   /** Whether this model is marked as the best (highest quality) for any linked API key */
   isBest: z.boolean(),
   /** API keys that provide access to this model */
@@ -198,5 +202,7 @@ export const ModelWithApiKeysSchema = SelectModelSchema.extend({
   isCustomPrice: z.boolean(),
   /** Source of the effective price */
   priceSource: PriceSourceSchema,
+  /** True when the provider charges nothing for this model (both raw prices are zero). */
+  isFree: z.boolean(),
 });
 export type ModelWithApiKeys = z.infer<typeof ModelWithApiKeysSchema>;

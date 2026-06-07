@@ -1,6 +1,6 @@
 "use client";
 
-import type { archestraApiTypes } from "@shared";
+import type { archestraApiTypes } from "@archestra/shared";
 import { Building2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { StandardFormDialog } from "@/components/standard-dialog";
@@ -14,6 +14,8 @@ type CatalogItem =
   archestraApiTypes.GetInternalMcpCatalogResponses["200"][number];
 
 export interface NoAuthInstallResult {
+  /** Catalog id to install from. */
+  catalogId: string;
   /** Installation scope (personal, team, org) */
   scope: McpServerInstallScope;
   /** Team ID to assign the MCP server to (only when scope is "team") */
@@ -53,8 +55,13 @@ export function NoAuthInstallDialog({
   const [canInstall, setCanInstall] = useState(true);
 
   const handleInstall = useCallback(async () => {
-    await onInstall({ scope, teamId: selectedTeamId });
-  }, [onInstall, scope, selectedTeamId]);
+    if (!catalogItem) return;
+    await onInstall({
+      catalogId: catalogItem.id,
+      scope,
+      teamId: selectedTeamId,
+    });
+  }, [onInstall, scope, selectedTeamId, catalogItem]);
 
   const handleClose = useCallback(() => {
     setSelectedTeamId(null);

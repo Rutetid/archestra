@@ -8,18 +8,21 @@ import {
   inArray,
   ne,
   type SQL,
+  sql,
 } from "drizzle-orm";
 import db, { schema } from "@/database";
-import {
-  normalizeCronExpression,
-  normalizeTimezone,
-} from "@/schedule-triggers/utils";
+import { notDeleted } from "@/database/schemas/soft-deletable-table";
 import type {
   InsertScheduleTrigger,
   ScheduleTrigger,
   UpdateScheduleTrigger,
 } from "@/types";
 import { InsertScheduleTriggerSchema } from "@/types";
+import {
+  normalizeCronExpression,
+  normalizeTimezone,
+} from "@/utils/schedule-trigger";
+import { escapeLikePattern } from "@/utils/sql-search";
 
 type ScheduleTriggerListFilters = {
   organizationId: string;
@@ -74,9 +77,12 @@ class ScheduleTriggerModel {
         schema.usersTable,
         eq(schema.scheduleTriggersTable.actorUserId, schema.usersTable.id),
       )
-      .leftJoin(
+      .innerJoin(
         schema.agentsTable,
-        eq(schema.scheduleTriggersTable.agentId, schema.agentsTable.id),
+        and(
+          eq(schema.scheduleTriggersTable.agentId, schema.agentsTable.id),
+          notDeleted(schema.agentsTable),
+        ),
       )
       .where(and(...filters))
       .orderBy(desc(schema.scheduleTriggersTable.createdAt))
@@ -105,9 +111,12 @@ class ScheduleTriggerModel {
         schema.usersTable,
         eq(schema.scheduleTriggersTable.actorUserId, schema.usersTable.id),
       )
-      .leftJoin(
+      .innerJoin(
         schema.agentsTable,
-        eq(schema.scheduleTriggersTable.agentId, schema.agentsTable.id),
+        and(
+          eq(schema.scheduleTriggersTable.agentId, schema.agentsTable.id),
+          notDeleted(schema.agentsTable),
+        ),
       )
       .where(eq(schema.scheduleTriggersTable.id, id));
 
@@ -173,9 +182,12 @@ class ScheduleTriggerModel {
         schema.usersTable,
         eq(schema.scheduleTriggersTable.actorUserId, schema.usersTable.id),
       )
-      .leftJoin(
+      .innerJoin(
         schema.agentsTable,
-        eq(schema.scheduleTriggersTable.agentId, schema.agentsTable.id),
+        and(
+          eq(schema.scheduleTriggersTable.agentId, schema.agentsTable.id),
+          notDeleted(schema.agentsTable),
+        ),
       )
       .where(eq(schema.scheduleTriggersTable.enabled, true));
 
@@ -206,13 +218,31 @@ class ScheduleTriggerModel {
       .set({ lastExecutedAt: now })
       .where(eq(schema.scheduleTriggersTable.id, id));
   }
+
+  static async findByIdForAudit(
+    id: string,
+    organizationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const trigger = await ScheduleTriggerModel.findById(id);
+    if (!trigger || trigger.organizationId !== organizationId) return null;
+
+    return {
+      id: trigger.id,
+      name: trigger.name,
+      agentId: trigger.agentId,
+      agentName: trigger.agent?.name ?? null,
+      messageTemplate: trigger.messageTemplate,
+      cronExpression: trigger.cronExpression,
+      timezone: trigger.timezone,
+      enabled: trigger.enabled,
+      actorUserId: trigger.actorUserId,
+      lastExecutedAt: trigger.lastExecutedAt?.toISOString() ?? null,
+      createdAt: trigger.createdAt.toISOString(),
+    };
+  }
 }
 
 export default ScheduleTriggerModel;
-
-function escapeLikePattern(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
-}
 
 function buildListFilters(
   params: Pick<
@@ -235,6 +265,11 @@ function buildListFilters(
 
   const filters: SQL[] = [
     eq(schema.scheduleTriggersTable.organizationId, params.organizationId),
+    sql`EXISTS (
+      SELECT 1 FROM ${schema.agentsTable}
+      WHERE ${schema.agentsTable.id} = ${schema.scheduleTriggersTable.agentId}
+        AND ${schema.agentsTable.deletedAt} IS NULL
+    )`,
   ];
 
   if (params.enabled !== undefined) {

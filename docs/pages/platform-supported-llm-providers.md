@@ -3,7 +3,7 @@ title: Supported LLM Providers
 category: LLM Proxy
 order: 2
 description: LLM providers supported by Archestra Platform
-lastUpdated: 2026-02-22
+lastUpdated: 2026-05-31
 ---
 
 <!--
@@ -22,9 +22,12 @@ The model router exposes one OpenAI-compatible interface for models across confi
 
 ### Supported Model Router APIs
 
-- **Responses API** (`/responses`) - ✅ Supported for text requests across model-router-compatible providers
-- **Chat Completions API** (`/chat/completions`) - ✅ Supported for text chat requests across model-router-compatible providers
-- **Models API** (`/models`) - ✅ Returns provider-qualified model IDs
+- **Responses API** (`/responses`) for text requests across model-router-compatible providers
+- **Chat Completions API** (`/chat/completions`) for text chat requests across model-router-compatible providers
+- **Models API** (`/models`) for provider-qualified chat and embedding model IDs
+- **Embeddings API** (`/embeddings`) for OpenAI embedding models only
+
+> ⚠️ Embeddings support for other providers is tracked in [GitHub Issue #5174](https://github.com/archestra-ai/archestra/issues/5174).
 
 ### Model Router Connection Details
 
@@ -33,7 +36,7 @@ The model router exposes one OpenAI-compatible interface for models across confi
 
 ### List Models
 
-Call `GET /v1/model-router/{llm-proxy-id}/models` to list OpenAI-compatible model objects. Model IDs are returned as `<provider>:<model-id>` and only include providers mapped to the virtual key or LLM OAuth client used for the request. See [Authentication](/docs/platform-llm-proxy-authentication) for configuration details.
+Call `GET /v1/model-router/{llm-proxy-id}/models` to list OpenAI-compatible model objects. Model IDs are returned as `<provider>:<model-id>` and only include providers mapped to the virtual key or LLM OAuth client used for the request. The list includes chat models and embedding models. See [Authentication](/docs/platform-llm-proxy-authentication) for configuration details.
 
 ### Model Resolution
 
@@ -49,8 +52,9 @@ Model Router translation is text-first. Anthropic, Gemini, and Cohere routes cur
 
 ### Supported OpenAI APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported
-- **Responses API** (`/responses`) - ✅ Fully supported
+- **Chat Completions API** (`/chat/completions`)
+- **Responses API** (`/responses`)
+- **Embeddings API** (`/embeddings`)
 
 ### OpenAI Connection Details
 
@@ -66,7 +70,7 @@ Model Router translation is text-first. Anthropic, Gemini, and Cohere routes cur
 
 ### Supported Anthropic APIs
 
-- **Messages API** (`/messages`) - ✅ Fully supported
+- **Messages API** (`/messages`)
 
 ### Anthropic Connection Details
 
@@ -90,8 +94,8 @@ Archestra supports both the [Google AI Studio](https://ai.google.dev/) (Gemini D
 
 ### Supported Gemini APIs
 
-- **Generate Content API** (`:generateContent`) - ✅ Fully supported
-- **Stream Generate Content API** (`:streamGenerateContent`) - ✅ Fully supported
+- **Generate Content API** (`:generateContent`)
+- **Stream Generate Content API** (`:streamGenerateContent`)
 
 ### Gemini Connection Details
 
@@ -173,16 +177,12 @@ See the [Vertex AI authentication guide](https://cloud.google.com/vertex-ai/docs
 
 ### Supported Cerebras APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported
+- **Chat Completions API** (`/chat/completions`)
 
 ### Cerebras Connection Details
 
 - **Base URL**: `http://localhost:9000/v1/cerebras/{agent-id}`
 - **Authentication**: Pass your Cerebras API key in the `Authorization` header as `Bearer <your-api-key>`
-
-### Important Notes
-
-- Usage of the llama models in the chat ⚠️ Not yet supported ([GitHub Issue #2058](https://github.com/archestra-ai/archestra/issues/2058)) 
 
 ## Cohere
 
@@ -190,8 +190,8 @@ See the [Vertex AI authentication guide](https://cloud.google.com/vertex-ai/docs
 
 ### Supported Cohere APIs
 
-- **Chat API** (`/chat`) - ✅ Fully supported
-- **Streaming**: ✅ Fully supported
+- **Chat API** (`/chat`)
+- **Streaming**
 
 ### Cohere Connection Details
 
@@ -215,7 +215,7 @@ See the [Vertex AI authentication guide](https://cloud.google.com/vertex-ai/docs
 
 ### Supported Groq APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
 
 ### Groq Connection Details
 
@@ -246,12 +246,12 @@ You can generate an API key from the [Groq Console](https://console.groq.com/key
 
 ## OpenRouter
 
-[OpenRouter](https://openrouter.ai/) provides access to many models via a single OpenAI-compatible API, with optional attribution headers for ranking and analytics.
+[OpenRouter](https://openrouter.ai/) provides access to many models - including **free** ones - via a single OpenAI-compatible API, with optional attribution headers for ranking and analytics.
 
 ### Supported OpenRouter APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
-- **Embeddings API** (`/embeddings`) - ✅ Supported for Knowledge Base embeddings
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
+- **Embeddings API** (`/embeddings`) for Knowledge Base embeddings
 
 ### OpenRouter Connection Details
 
@@ -264,8 +264,9 @@ You can generate an API key from the [Groq Console](https://console.groq.com/key
 | ---------------------------------- | -------- | --------------------------------------------------------------------------- |
 | `ARCHESTRA_OPENROUTER_BASE_URL`    | No       | OpenRouter API base URL (default: `https://openrouter.ai/api/v1`)           |
 | `ARCHESTRA_CHAT_OPENROUTER_API_KEY`| No       | Default API key for OpenRouter (can be overridden per conversation/team/org)|
-| `ARCHESTRA_OPENROUTER_REFERER`     | No       | Attribution header `HTTP-Referer` sent to OpenRouter (recommended)          |
-| `ARCHESTRA_OPENROUTER_TITLE`       | No       | Attribution header `X-Title` sent to OpenRouter (recommended)               |
+| `ARCHESTRA_OPENROUTER_REFERER`     | No       | Attribution header `HTTP-Referer` sent to OpenRouter (default: `https://archestra.ai`) |
+| `ARCHESTRA_OPENROUTER_TITLE`       | No       | App name sent to OpenRouter as `X-OpenRouter-Title` (recommended)           |
+| `ARCHESTRA_OPENROUTER_CATEGORIES`  | No       | Comma-separated OpenRouter marketplace categories sent as `X-OpenRouter-Categories` (default: `general-chat,personal-agent`) |
 
 ### Getting an API Key
 
@@ -273,13 +274,19 @@ You can generate an API key from the [OpenRouter dashboard](https://openrouter.a
 
 ### Popular Models
 
-- `openrouter/auto`
-- `openrouter/openai/gpt-4o-mini`
+- `openrouter/auto` - OpenRouter's Auto Router; picks the best model per request, billed at that model's rate.
+- `openrouter/free` - OpenRouter's Free Models Router; see below.
+- `~`-prefixed ids such as `~anthropic/claude-sonnet-latest` are OpenRouter "latest" aliases that always redirect to the newest model in a family. They sync and behave like ordinary models, and are shown with a "Latest" badge in the picker.
 
-### Important Notes
+### Free Models
 
-- **OpenAI-compatible API**: OpenRouter uses the OpenAI Chat Completions request/response format.
-- **Attribution headers**: OpenRouter recommends sending `HTTP-Referer` and `X-Title` headers. Archestra can be configured to send these automatically via `ARCHESTRA_OPENROUTER_REFERER` and `ARCHESTRA_OPENROUTER_TITLE`.
+OpenRouter exposes `:free` model variants that cost nothing. An OpenRouter API key is still required to use them, but OpenRouter doesn't charge for requests that route to free models. Model providers may use the data from free model requests to improve their models, so it may be not suitable for sensitive data.
+
+**Free Models Router** (`openrouter/free`) is OpenRouter's [built-in router](https://openrouter.ai/openrouter/free) that picks a free model per request, filtering for the features the request needs (tool calling, structured outputs, image input).
+
+When an OpenRouter key is added to an organization that has no default model configured, Archestra sets the Free Models Router as the organization default, giving a zero-cost starting point. An explicitly chosen default is never overridden.
+
+Dynamic-pricing routers (`openrouter/auto`) report no fixed per-token price, so the pricing is dynamic.
 
 ## Mistral AI
 
@@ -287,7 +294,7 @@ You can generate an API key from the [OpenRouter dashboard](https://openrouter.a
 
 ### Supported Mistral APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported
+- **Chat Completions API** (`/chat/completions`)
 
 ### Mistral Connection Details
 
@@ -304,7 +311,7 @@ You can get an API key from the [Mistral AI Console](https://console.mistral.ai/
 
 ### Supported Perplexity APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported
+- **Chat Completions API** (`/chat/completions`)
 
 ### Perplexity Connection Details
 
@@ -334,7 +341,7 @@ You can get an API key from the [Perplexity Settings](https://www.perplexity.ai/
 
 ### Supported vLLM APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
 
 ### vLLM Connection Details
 
@@ -359,6 +366,7 @@ The base URL can also be set globally via the `ARCHESTRA_VLLM_BASE_URL` environm
 ### Important Notes
 
 - **Configure base URL to enable vLLM**: The vLLM provider is only available when `ARCHESTRA_VLLM_BASE_URL` is set or a per-key base URL is configured in the UI. Without either, vLLM won't appear as an option.
+- **Auto-seeding needs the base URL**: Setting `ARCHESTRA_CHAT_VLLM_API_KEY` alone does not create a vLLM key at startup. `ARCHESTRA_VLLM_BASE_URL` must also be set, otherwise the provider is skipped (a key without a base URL would silently route to the public OpenAI endpoint).
 - **No API key required for most deployments**: Unlike cloud providers, self-hosted vLLM typically doesn't require authentication. When adding a vLLM key in the platform, the API key field is marked as optional.
 
 ## Ollama
@@ -367,7 +375,7 @@ The base URL can also be set globally via the `ARCHESTRA_VLLM_BASE_URL` environm
 
 ### Supported Ollama APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
 
 ### Ollama Connection Details
 
@@ -401,7 +409,7 @@ The default base URL is `http://localhost:11434/v1`. Override it per-key in the 
 
 ### Supported Zhipu AI APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
 
 ### Zhipu AI Connection Details
 
@@ -436,7 +444,7 @@ The default base URL is `http://localhost:11434/v1`. Override it per-key in the 
 
 ### Supported xAI APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
 
 ### xAI Connection Details
 
@@ -473,7 +481,7 @@ You can generate an API key from the [xAI Console](https://console.x.ai/).
 
 ### Supported MiniMax APIs
 
-- **Chat Completions API** (`/chat/completions`) - ✅ Fully supported (OpenAI-compatible)
+- **Chat Completions API** (`/chat/completions`) - OpenAI-compatible
 
 ### MiniMax Connection Details
 
@@ -507,10 +515,10 @@ You can generate an API key from the [xAI Console](https://console.x.ai/).
 
 ### Supported Bedrock APIs
 
-- **Converse API** (`/converse`) - ✅ Fully supported ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html))
-- **Converse Stream API** (`/converse-stream`) - ✅ Fully supported ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html))
-- **InvokeModel API** (`/invoke`) -  ⚠️ Not yet supported  ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html))
-- **OpenAI-compatible API (Mantle)** -  ⚠️ Not yet supported ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html))
+- **Converse API** (`/converse`) ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html))
+- **Converse Stream API** (`/converse-stream`) ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html))
+- **InvokeModel API** (`/invoke`) - ⚠️ Not yet supported ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html))
+- **OpenAI-compatible API (Mantle)** - ⚠️ Not yet supported ([AWS Docs](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html))
 
 ### Bedrock Connection Details
 
@@ -683,6 +691,8 @@ Known region prefixes: `us`, `eu`, `ap`, `global`.
 | `ARCHESTRA_AZURE_OPENAI_ENTRA_ID_ENABLED` | No | Set to `true` to use Microsoft Entra ID instead of an Azure API key |
 | `ARCHESTRA_CHAT_AZURE_OPENAI_API_KEY` | No | Default API key for Azure AI Foundry chat (can be overridden per conversation/team/org) |
 
+Setting `ARCHESTRA_CHAT_AZURE_OPENAI_API_KEY` alone does not create an Azure key at startup; `ARCHESTRA_AZURE_OPENAI_BASE_URL` must also be set (Azure has no usable default endpoint), otherwise the provider is skipped.
+
 ### Getting an Azure API Key
 
 You can generate an API key from the [Azure Portal](https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI) under your Azure OpenAI resource.
@@ -767,6 +777,12 @@ https://<resource-name>.openai.azure.com/openai
 ```
 
 Archestra discovers deployments from `/openai/deployments` and routes each request to the deployment named in the request `model` field.
+Do not configure a deployment-specific URL such as `https://<resource-name>.openai.azure.com/openai/deployments/<deployment-name>`.
+If your Foundry project has its own OpenAI endpoint, use the same resource-level format with the project hostname:
+
+```
+https://<project-name>.openai.azure.com/openai
+```
 
 For Microsoft Foundry v1, use the OpenAI-compatible API root:
 
@@ -774,14 +790,29 @@ For Microsoft Foundry v1, use the OpenAI-compatible API root:
 https://<resource-name>.services.ai.azure.com/openai/v1
 ```
 
-The same formats apply when configuring a Base URL in the API key settings UI.
+The same formats apply when configuring a Base URL in the API key settings UI. Base URL is used for deployment discovery and as the default runtime endpoint.
 
-### Notes
+If deployment discovery and runtime inference use different Azure OpenAI endpoints, set the provider key's optional Inference URL to the runtime endpoint:
+
+```
+https://<runtime-resource-name>.openai.azure.com/openai
+```
+
+Archestra will still discover deployments from Base URL, then send chat, reranking, embedding, LLM Proxy, OAuth client, and virtual key traffic to Inference URL.
+
+### Deployment Discovery and RBAC
+
+- For Entra ID configurations, Archestra first tries Azure deployment discovery. If the inference endpoint cannot list deployments, Archestra uses Azure management APIs to find the Cognitive Services account and list its deployments.
+- Some Foundry project endpoints are backed by a parent Azure AI Services account, for example `/providers/Microsoft.CognitiveServices/accounts/<account-name>/projects/<project-name>`. Archestra resolves the project to its parent account before listing deployments.
+- For Azure OpenAI resource URLs, Archestra does not fall back to the available model catalog because that catalog includes undeployed models.
+- For built-in Azure RBAC, assign `Cognitive Services OpenAI User` at the backing Azure AI Services resource when possible. Use the full ARM resource scope, for example `/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>`. For the narrowest access, use a custom role with `Microsoft.Resources/subscriptions/read`, `Microsoft.Resources/subscriptions/resources/read`, `Microsoft.CognitiveServices/accounts/read`, and `Microsoft.CognitiveServices/accounts/deployments/read`.
+
+### Routing Notes
 
 - **API Version**: Azure OpenAI resource URLs use `ARCHESTRA_AZURE_OPENAI_API_VERSION` for Chat Completions and model discovery. Azure `/responses` requests use `ARCHESTRA_AZURE_OPENAI_RESPONSES_API_VERSION`. Foundry v1 URLs do not use either query parameter.
 - **Microsoft Entra ID**: When `ARCHESTRA_AZURE_OPENAI_ENTRA_ID_ENABLED=true`, Azure provider keys can omit the API key value and Archestra sends `Authorization: Bearer <token>` to Azure OpenAI instead of `api-key`.
 - **Grok on Azure**: Grok models sold directly by Azure use the Foundry v1 OpenAI-compatible Chat Completions API. The model must be deployed in the Azure resource before Archestra can route to it.
 - **Claude on Azure**: Claude models on Microsoft Foundry use Anthropic's Messages API shape, not the OpenAI-compatible Azure route. Configure the Anthropic provider section above.
-- **Multiple Deployments**: Azure OpenAI is the main provider that exposes multiple deployment names behind one resource-level credential. Use one Azure provider key per Azure resource, then select the deployment by model name.
+- **Multiple Deployments**: Azure OpenAI is the main provider that exposes multiple deployment names behind one resource-level credential. One Azure provider key should represent the Azure resource or Foundry v1 endpoint, not an individual deployment. After model sync, select the deployment by model name.
 - **Responses API model field**: For Azure `/responses` requests, send the deployment name in the `model` field. Archestra will route the request to Azure's `/openai/responses` endpoint while preserving the configured deployment URL for discovery and management.
 - **OpenAI-compatible API**: Azure AI Foundry supports both Chat Completions and Responses-style request flows through Archestra.

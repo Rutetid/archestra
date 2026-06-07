@@ -2,7 +2,7 @@ import {
   createPaginatedResponseSchema,
   PaginationQuerySchema,
   RouteId,
-} from "@shared";
+} from "@archestra/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { policyConfigurationService } from "@/agents/subagents/policy-configuration";
@@ -364,6 +364,7 @@ const agentToolRoutes: FastifyPluginAsyncZod = async (fastify) => {
                     toolInvocationAction: z.enum([
                       "allow_when_context_is_sensitive",
                       "block_when_context_is_sensitive",
+                      "require_approval",
                       "block_always",
                     ]),
                     trustedDataAction: z.enum([

@@ -1,4 +1,4 @@
-import type { Permissions } from "@shared";
+import type { Permissions } from "@archestra/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,14 +7,14 @@ import { useSettingsTabs } from "./settings-tabs";
 
 vi.mock("@/lib/clients/auth/auth-client", () => ({
   authClient: {
-    useSession: vi.fn(),
+    getSession: vi.fn(),
   },
 }));
 
 let mockPermissions: Permissions = {};
 
-vi.mock("@shared", async () => {
-  const actual = await vi.importActual("@shared");
+vi.mock("@archestra/shared", async () => {
+  const actual = await vi.importActual("@archestra/shared");
   return {
     ...actual,
     archestraApiSdk: {
@@ -59,12 +59,12 @@ beforeEach(() => {
   mockSecretsType = "DB";
   mockEnterpriseFeatures = false;
 
-  vi.mocked(authClient.useSession).mockReturnValue({
+  vi.mocked(authClient.getSession).mockResolvedValue({
     data: {
       user: { id: "test-user", email: "test@example.com" },
       session: { id: "test-session" },
     },
-  } as ReturnType<typeof authClient.useSession>);
+  } as Awaited<ReturnType<typeof authClient.getSession>>);
 });
 
 function getTabLabels(tabs: Array<{ label: string }>) {
@@ -91,6 +91,7 @@ describe("useSettingsTabs", () => {
       ac: ["read"],
       organizationSettings: ["read"],
       apiKey: ["read"],
+      serviceAccount: ["read"],
       llmSettings: ["read"],
       agentSettings: ["read"],
     };
@@ -102,6 +103,7 @@ describe("useSettingsTabs", () => {
     await waitFor(() => {
       const labels = getTabLabels(result.current);
       expect(labels).toContain("API Keys");
+      expect(labels).toContain("Service Accounts");
       expect(labels).toContain("Agents");
       expect(labels).toContain("LLM");
       expect(labels).toContain("Users");
@@ -123,6 +125,21 @@ describe("useSettingsTabs", () => {
     await waitFor(() => {
       const labels = getTabLabels(result.current);
       expect(labels).toContain("LLM");
+    });
+  });
+
+  it("shows Service Accounts tab when user has serviceAccount:read permission", async () => {
+    mockPermissions = {
+      serviceAccount: ["read"],
+    };
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      const labels = getTabLabels(result.current);
+      expect(labels).toContain("Service Accounts");
     });
   });
 
@@ -239,6 +256,32 @@ describe("useSettingsTabs", () => {
     });
   });
 
+  it("shows Integrations tab when user has githubAppConfig:read permission", async () => {
+    mockPermissions = { githubAppConfig: ["read"] };
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      const labels = getTabLabels(result.current);
+      expect(labels).toContain("Integrations");
+    });
+  });
+
+  it("hides Integrations tab when user lacks githubAppConfig:read permission", async () => {
+    mockPermissions = {};
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      const labels = getTabLabels(result.current);
+      expect(labels).not.toContain("Integrations");
+    });
+  });
+
   it("maintains correct tab order", async () => {
     mockEnterpriseFeatures = true;
     mockSecretsType = "Vault";
@@ -246,10 +289,12 @@ describe("useSettingsTabs", () => {
       member: ["read"],
       team: ["read"],
       ac: ["read"],
+      githubAppConfig: ["read"],
       identityProvider: ["read"],
       secret: ["read"],
       organizationSettings: ["read"],
       apiKey: ["read"],
+      serviceAccount: ["read"],
       llmSettings: ["read"],
       agentSettings: ["read"],
     };
@@ -263,12 +308,13 @@ describe("useSettingsTabs", () => {
       expect(labels).toEqual([
         "Your Account",
         "API Keys",
+        "Service Accounts",
         "Agents",
         "LLM",
-        "Connect page",
         "Users",
         "Teams",
         "Roles",
+        "Integrations",
         "Identity Providers",
         "Secrets",
         "Organization",

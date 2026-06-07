@@ -1,15 +1,11 @@
 "use client";
 
-import type { archestraApiTypes } from "@shared";
+import type { archestraApiTypes } from "@archestra/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentSelector } from "@/components/agent-selector";
 import { LlmModelSearchableSelect } from "@/components/llm-model-select";
-import { PROVIDER_CONFIG } from "@/components/llm-provider-api-key-form";
-import {
-  LlmProviderApiKeyOptionLabel,
-  LlmProviderApiKeySelectItems,
-} from "@/components/llm-provider-options";
-import { ProfileFilterOption } from "@/components/log-filter-option";
+import { LlmProviderApiKeyDropdown } from "@/components/llm-provider-api-key-dropdown";
 import { WithPermissions } from "@/components/roles/with-permissions";
 import {
   SettingsBlock,
@@ -17,7 +13,6 @@ import {
   SettingsSectionStack,
 } from "@/components/settings/settings-block";
 import { Button } from "@/components/ui/button";
-import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Select,
   SelectContent,
@@ -50,13 +45,6 @@ type GlobalToolPolicy = NonNullable<
 
 type FileUploadsEnabled = "enabled" | "disabled";
 
-type AgentSelectItem = {
-  value: string;
-  label: string;
-  content?: React.ReactNode;
-  selectedContent?: React.ReactNode;
-};
-
 export default function AgentSettingsPage() {
   const { getToolName } = useArchestraMcpIdentity();
   const appName = useAppName();
@@ -65,6 +53,7 @@ export default function AgentSettingsPage() {
   const { data: orgAgents } = useOrgScopedAgents();
 
   const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>("");
+  const [apiKeySelectorOpen, setApiKeySelectorOpen] = useState(false);
   const [defaultModel, setDefaultModel] = useState<string>("");
   const [defaultAgentId, setDefaultAgentId] = useState<string>("");
   const [toolPolicy, setToolPolicy] = useState<GlobalToolPolicy>("permissive");
@@ -131,11 +120,7 @@ export default function AgentSettingsPage() {
     if (!apiKeys) return;
 
     if (changes.hasChanges) {
-      const payload = buildSavePayload(
-        localState,
-        savedStateRef.current,
-        apiKeys,
-      );
+      const payload = buildSavePayload(localState, savedStateRef.current);
       await updateAgentMutation.mutateAsync(payload);
       savedStateRef.current = { ...localState };
     }
@@ -163,9 +148,12 @@ export default function AgentSettingsPage() {
   const modelItems = useMemo(() => {
     if (!allModels) return [];
     return allModels.map((model) => ({
-      value: model.id,
+      value: model.dbId,
       model: model.displayName ?? model.id,
+      modelId: model.id,
       provider: model.provider,
+      isFree: model.isFree,
+      isBest: model.isBest,
     }));
   }, [allModels]);
 
@@ -173,37 +161,7 @@ export default function AgentSettingsPage() {
     () => availableKeys.find((key) => key.id === selectedApiKeyId) ?? null,
     [availableKeys, selectedApiKeyId],
   );
-
-  const agentItems = useMemo(() => {
-    const items: AgentSelectItem[] = [
-      { value: "__personal__", label: "User's personal agent" },
-    ];
-    for (const agent of orgAgents ?? []) {
-      items.push({
-        value: agent.id,
-        label: agent.name,
-        content: (
-          <ProfileFilterOption
-            profile={{
-              name: agent.name,
-              icon: agent.icon ?? null,
-              agentType: "agent",
-            }}
-          />
-        ),
-        selectedContent: (
-          <ProfileFilterOption
-            profile={{
-              name: agent.name,
-              icon: agent.icon ?? null,
-              agentType: "agent",
-            }}
-          />
-        ),
-      });
-    }
-    return items;
-  }, [orgAgents]);
+  const canFilterFreeModels = selectedApiKey?.provider === "openrouter";
 
   const handleAgentChange = useCallback((value: string) => {
     setDefaultAgentId(value === "__personal__" ? "" : value);
@@ -230,46 +188,27 @@ export default function AgentSettingsPage() {
           >
             {({ hasPermission }) => (
               <div className="flex flex-col gap-2 w-80">
-                <Select
-                  value={selectedApiKeyId}
-                  onValueChange={(value) => {
+                <LlmProviderApiKeyDropdown
+                  availableKeys={availableKeys}
+                  selectedApiKeyId={selectedApiKeyId || null}
+                  disabled={isSaving || !hasPermission}
+                  open={apiKeySelectorOpen}
+                  onOpenChange={setApiKeySelectorOpen}
+                  onSelectKey={(value) => {
                     setSelectedApiKeyId(value);
                     setDefaultModel("");
+                    setApiKeySelectorOpen(false);
                   }}
-                  disabled={isSaving || !hasPermission}
-                >
-                  <SelectTrigger className="w-80">
-                    <SelectValue placeholder="Select API key...">
-                      {selectedApiKey ? (
-                        <LlmProviderApiKeyOptionLabel
-                          icon={PROVIDER_CONFIG[selectedApiKey.provider].icon}
-                          providerName={
-                            PROVIDER_CONFIG[selectedApiKey.provider].name
-                          }
-                          keyName={selectedApiKey.name}
-                          secondaryLabel={`${selectedApiKey.provider} - ${selectedApiKey.scope}`}
-                        />
-                      ) : (
-                        "Select API key..."
-                      )}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <LlmProviderApiKeySelectItems
-                      options={availableKeys.map((key) => ({
-                        value: key.id,
-                        icon: PROVIDER_CONFIG[key.provider].icon,
-                        providerName: PROVIDER_CONFIG[key.provider].name,
-                        keyName: key.name,
-                        secondaryLabel: `${key.provider} - ${key.scope}`,
-                      }))}
-                    />
-                  </SelectContent>
-                </Select>
+                  triggerVariant="select"
+                  triggerClassName="w-80"
+                  popoverClassName="w-80"
+                  emptyTriggerLabel="Select API key..."
+                />
                 <LlmModelSearchableSelect
                   value={defaultModel}
                   onValueChange={setDefaultModel}
                   options={modelItems}
+                  freeFilterable={canFilterFreeModels}
                   placeholder={
                     !selectedApiKeyId
                       ? "Select API key first..."
@@ -313,15 +252,20 @@ export default function AgentSettingsPage() {
             noPermissionHandle="tooltip"
           >
             {({ hasPermission }) => (
-              <SearchableSelect
+              <AgentSelector
+                mode="single"
                 value={defaultAgentId || "__personal__"}
                 onValueChange={handleAgentChange}
+                agents={orgAgents ?? []}
                 placeholder="Select agent..."
                 searchPlaceholder="Search agents..."
-                items={agentItems}
                 className="w-80"
                 disabled={isSaving || !hasPermission}
                 hint="Only org-wide agents are shown"
+                personalDefaultOption={{
+                  value: "__personal__",
+                  label: "User's personal agent",
+                }}
               />
             )}
           </WithPermissions>

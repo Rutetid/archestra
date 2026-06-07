@@ -1,5 +1,6 @@
 import type { McpCatalogFormValues } from "./mcp-catalog-form.types";
 import {
+  buildCloneFormValues,
   transformCatalogItemToFormValues,
   transformExternalCatalogToFormValues,
   transformFormToApiData,
@@ -69,6 +70,7 @@ describe("transformFormToApiData", () => {
         client_id: "client-id",
         client_secret: "client-secret",
         audience: "",
+        resource: "https://mcp.example.com",
         redirect_uris: "https://app.example.com/oauth-callback",
         scopes: "read:jira-work",
         supports_resource_metadata: true,
@@ -110,6 +112,7 @@ describe("transformFormToApiData", () => {
       server_url: "https://mcp.example.com",
       auth_server_url: "https://auth.example.com",
       authorization_endpoint: "https://legacy-idp.example.com/oauth/authorize",
+      resource: "https://mcp.example.com",
       well_known_url:
         "https://auth.example.com/.well-known/openid-configuration",
       resource_metadata_url:
@@ -457,6 +460,7 @@ describe("transformFormToApiData", () => {
         value: "tenant-42",
         description: "Tenant ID",
         includeBearerPrefix: false,
+        sensitive: false,
       },
     ]);
   });
@@ -696,6 +700,7 @@ describe("transformFormToApiData", () => {
         client_id: "id",
         client_secret: "secret",
         audience: "",
+        resource: "",
         redirect_uris: "https://app.example.com/oauth-callback",
         scopes: "",
         supports_resource_metadata: true,
@@ -741,6 +746,105 @@ describe("transformFormToApiData", () => {
         });
       });
     }
+  });
+
+  describe("round-trips the `sensitive` flag on additional headers", () => {
+    // form → API → form preserves the `sensitive` flag on installation-scoped
+    // headers (where the flag controls input masking but doesn't change
+    // storage).
+    type AdditionalHeader = NonNullable<
+      McpCatalogFormValues["additionalHeaders"]
+    >[number];
+
+    function makeBaseValues(header: AdditionalHeader): McpCatalogFormValues {
+      return {
+        name: "Sensitive Headers MCP",
+        description: "",
+        icon: null,
+        serverType: "remote",
+        serverUrl: "https://mcp.example.com",
+        authMethod: "none",
+        includeBearerPrefix: false,
+        authHeaderName: "",
+        additionalHeaders: [header],
+        oauthConfig: undefined,
+        enterpriseManagedConfig: null,
+        localConfig: undefined,
+        deploymentSpecYaml: "",
+        originalDeploymentSpecYaml: "",
+        oauthClientSecretVaultPath: "",
+        oauthClientSecretVaultKey: "",
+        localConfigVaultPath: "",
+        localConfigVaultKey: "",
+        labels: [],
+        scope: "personal",
+        teams: [],
+      };
+    }
+
+    function roundTrip(header: AdditionalHeader): AdditionalHeader {
+      const values = makeBaseValues(header);
+      const apiData = transformFormToApiData(values);
+      const rehydrated = transformCatalogItemToFormValues({
+        id: "round-trip",
+        name: values.name,
+        description: null,
+        icon: null,
+        serverType: "remote",
+        serverUrl: values.serverUrl,
+        oauthConfig: null,
+        enterpriseManagedConfig: null,
+        localConfig: null,
+        deploymentSpecYaml: null,
+        userConfig: apiData.userConfig ?? null,
+        scope: "personal",
+        teams: [],
+        labels: [],
+      } as never);
+      expect(rehydrated.additionalHeaders).toHaveLength(1);
+      const [first] = rehydrated.additionalHeaders ?? [];
+      if (!first) {
+        throw new Error("expected hydrated header row");
+      }
+      return first;
+    }
+
+    it("preserves sensitive=true on an installation-scoped header", () => {
+      const result = roundTrip({
+        headerName: "x-tenant-token",
+        promptOnInstallation: true,
+        required: true,
+        value: "",
+        description: "",
+        includeBearerPrefix: false,
+        sensitive: true,
+      });
+      expect(result).toMatchObject({
+        headerName: "x-tenant-token",
+        promptOnInstallation: true,
+        sensitive: true,
+      });
+    });
+
+    it("forces sensitive=false on a static header regardless of incoming flag", () => {
+      // Server-side validator rejects sensitive + static; the form save
+      // path mirrors that so the API never sees the illegal combination.
+      const result = roundTrip({
+        headerName: "x-static",
+        promptOnInstallation: false,
+        required: false,
+        value: "fixed-value",
+        description: "",
+        includeBearerPrefix: false,
+        sensitive: true, // ← should be coerced to false by the save path
+      });
+      expect(result).toMatchObject({
+        headerName: "x-static",
+        promptOnInstallation: false,
+        value: "fixed-value",
+        sensitive: false,
+      });
+    });
   });
 });
 
@@ -858,5 +962,54 @@ describe("transformFormToApiData - secret env var preservation", () => {
     expect(env[0]).toMatchObject({ key: "EDITED", value: "fresh" });
     expect(env[1]?.key).toBe("UNTOUCHED");
     expect(env[1]?.value ?? "").toBe("");
+  });
+});
+
+describe("buildCloneFormValues", () => {
+  it("suffixes the name with -copy", () => {
+    const values = buildCloneFormValues({
+      id: "catalog-1",
+      name: "my-server",
+      description: "desc",
+      icon: null,
+      serverType: "remote",
+      serverUrl: "https://mcp.example.com",
+      oauthConfig: null,
+      enterpriseManagedConfig: null,
+      localConfig: null,
+      deploymentSpecYaml: null,
+      userConfig: {},
+      scope: "personal",
+      teams: [],
+      labels: [],
+    } as never);
+
+    expect(values.name).toBe("my-server-copy");
+  });
+
+  it("keeps secret values (clone is a full copy)", () => {
+    const values = buildCloneFormValues({
+      id: "catalog-1",
+      name: "oauth-server",
+      description: "",
+      icon: null,
+      serverType: "remote",
+      serverUrl: "https://mcp.example.com",
+      oauthConfig: {
+        client_id: "client-id",
+        client_secret: "keep-me",
+        grant_type: "authorization_code",
+        name: "oauth-server",
+      },
+      enterpriseManagedConfig: null,
+      localConfig: null,
+      deploymentSpecYaml: null,
+      userConfig: {},
+      scope: "personal",
+      teams: [],
+      labels: [],
+    } as never);
+
+    expect(values.oauthConfig?.client_secret).toBe("keep-me");
   });
 });

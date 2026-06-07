@@ -1,6 +1,9 @@
 "use client";
 
-import { type archestraApiTypes, isPlaywrightCatalogItem } from "@shared";
+import {
+  type archestraApiTypes,
+  isPlaywrightCatalogItem,
+} from "@archestra/shared";
 import { AlertTriangle } from "lucide-react";
 import {
   lazy,
@@ -72,6 +75,8 @@ const markdownComponents: Components = {
 };
 
 export interface LocalServerInstallResult {
+  /** Catalog id to install from. */
+  catalogId: string;
   environmentValues: Record<string, string>;
   userConfigValues?: Record<string, string>;
   /** Installation scope (personal, team, org) */
@@ -327,6 +332,7 @@ export function LocalServerInstallDialog({
     }
 
     await onConfirm({
+      catalogId: catalogItem.id,
       environmentValues: finalEnvironmentValues,
       userConfigValues: finalUserConfigValues,
       scope,

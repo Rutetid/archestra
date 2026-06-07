@@ -3,7 +3,7 @@ import {
   makeSwapAgentPokeText,
   SWAP_AGENT_FAILED_POKE_TEXT,
   SWAP_TO_DEFAULT_AGENT_POKE_TEXT,
-} from "@shared";
+} from "@archestra/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, test } from "vitest";
 import {
@@ -183,6 +183,7 @@ function makeConversationAgent(id: string, name: string) {
     name,
     systemPrompt: null,
     agentType: "agent" as const,
+    toolExposureMode: "full" as const,
     llmApiKeyId: null,
   };
 }
@@ -201,10 +202,12 @@ function makeConversation(
     title: "Test",
     selectedModel: "gpt-4o",
     selectedProvider: "openai",
+    modelId: null,
     hasCustomToolSelection: false,
     todoList: null,
     artifact: null,
     pinnedAt: null,
+    lastMessageAt: "2026-03-19T00:00:00.000Z",
     createdAt: "2026-03-19T00:00:00.000Z",
     updatedAt: "2026-03-19T00:00:00.000Z",
     agent: {
@@ -212,11 +215,13 @@ function makeConversation(
       name: "Agent A",
       systemPrompt: null,
       agentType: "agent",
+      toolExposureMode: "full",
       llmApiKeyId: null,
     },
     share: null,
     messages: [],
     chatErrors: [],
     ...overrides,
+    compactions: overrides.compactions ?? [],
   };
 }

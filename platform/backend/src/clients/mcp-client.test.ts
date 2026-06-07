@@ -7,7 +7,7 @@ import {
   MCP_CATALOG_SERVER_QUERY_PARAM,
   MCP_ENTERPRISE_AUTH_EXTENSION_ID,
   OAUTH_TOKEN_TYPE,
-} from "@shared";
+} from "@archestra/shared";
 import { vi } from "vitest";
 import config from "@/config";
 import db, { schema } from "@/database";
@@ -547,6 +547,45 @@ describe("McpClient", () => {
       expect(secondResult.isError).toBe(false);
       expect(mockClose).toHaveBeenCalledTimes(0);
       expect(mockConnect).toHaveBeenCalledTimes(1);
+    });
+
+    test("skips ping for recently validated active connections", async () => {
+      const tool = await ToolModel.createToolIfNotExists({
+        name: "github-mcp-server__recent_reuse",
+        description: "Recent active connection reuse",
+        parameters: {},
+        catalogId,
+      });
+
+      await AgentToolModel.create(agentId, tool.id, {
+        mcpServerId,
+        credentialResolutionMode: "static",
+      });
+
+      mockConnect.mockResolvedValue(undefined);
+      mockPing.mockResolvedValue(undefined);
+      mockCallTool.mockResolvedValue({
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      });
+
+      const toolCall = {
+        id: "call_recent_reuse",
+        name: tool.name,
+        arguments: {},
+      };
+
+      const firstResult = await mcpClient.executeToolCall(toolCall, agentId);
+      expect(firstResult.isError).toBe(false);
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      expect(mockPing).not.toHaveBeenCalled();
+
+      mockPing.mockClear();
+
+      const secondResult = await mcpClient.executeToolCall(toolCall, agentId);
+      expect(secondResult.isError).toBe(false);
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      expect(mockPing).not.toHaveBeenCalled();
     });
 
     describe("Concurrency limiter", () => {
@@ -1549,7 +1588,6 @@ describe("McpClient", () => {
 
         await McpServerModel.update(mcpServerId, { secretId: null });
         await InternalMcpCatalogModel.update(catalogId, {
-          name: "enterprise external jwt demo",
           enterpriseManagedConfig: {
             identityProviderId: identityProvider.id,
             requestedCredentialType: "bearer_token",
@@ -1688,7 +1726,6 @@ describe("McpClient", () => {
 
         await McpServerModel.update(mcpServerId, { secretId: null });
         await InternalMcpCatalogModel.update(catalogId, {
-          name: "entra protected api",
           enterpriseManagedConfig: {
             identityProviderId: entraIdentityProvider.id,
             requestedCredentialType: "bearer_token",
@@ -1819,7 +1856,6 @@ describe("McpClient", () => {
 
         await McpServerModel.update(mcpServerId, { secretId: null });
         await InternalMcpCatalogModel.update(catalogId, {
-          name: "entra protected api",
           enterpriseManagedConfig: {
             identityProviderId: entraIdentityProvider.id,
             requestedCredentialType: "bearer_token",
@@ -1860,7 +1896,7 @@ describe("McpClient", () => {
         const connectUrl = `${config.frontendBaseUrl}/auth/sso/EntraID?redirectTo=%2Fchat%2F00000000-0000-4000-8000-000000000123&mode=${LINKED_IDP_SSO_MODE}`;
         expect(result.isError).toBe(true);
         expect(result.error).toContain(
-          'Authentication required for "entra protected api"',
+          'Authentication required for "github-mcp-server"',
         );
         expect(result.error).toContain(
           "This tool needs a current EntraID session",
@@ -1870,7 +1906,7 @@ describe("McpClient", () => {
           archestraError: {
             type: "auth_required",
             catalogId,
-            catalogName: "entra protected api",
+            catalogName: "github-mcp-server",
             action: "connect_identity_provider",
             actionUrl: connectUrl,
             providerId: "EntraID",
@@ -2143,7 +2179,6 @@ describe("McpClient", () => {
         });
 
         await InternalMcpCatalogModel.update(catalogId, {
-          name: "keycloak protected demo",
           enterpriseManagedConfig: {
             identityProviderId: identityProvider.id,
             requestedCredentialType: "bearer_token",
@@ -2180,7 +2215,7 @@ describe("McpClient", () => {
 
         expect(result.isError).toBe(true);
         expect(result.error).toContain(
-          'Authentication required for "keycloak protected demo"',
+          'Authentication required for "github-mcp-server"',
         );
         expect(result.error).toContain(
           "This tool needs a current keycloak-managed-mcp session",
@@ -2192,7 +2227,7 @@ describe("McpClient", () => {
           archestraError: {
             type: "auth_required",
             catalogId,
-            catalogName: "keycloak protected demo",
+            catalogName: "github-mcp-server",
             action: "connect_identity_provider",
             actionUrl: `${config.frontendBaseUrl}/auth/sso/keycloak-managed-mcp?redirectTo=%2Fchat&mode=${LINKED_IDP_SSO_MODE}`,
             providerId: "keycloak-managed-mcp",
@@ -4468,6 +4503,297 @@ describe("McpClient", () => {
         );
         // Custom header should still be included
         expect(headers.get("x-custom")).toBe("allowed");
+      });
+    });
+
+    describe("MCP aggregate methods with OAuth headers", () => {
+      test("uses separate aggregate cached clients for external IdP users", async () => {
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "github-mcp-server__external_idp_resources",
+          description: "External IdP resources",
+          parameters: {},
+          catalogId,
+        });
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId,
+          credentialResolutionMode: "static",
+        });
+
+        mockListResources
+          .mockResolvedValueOnce({
+            resources: [{ uri: "resource://external-a" }],
+          })
+          .mockResolvedValueOnce({
+            resources: [{ uri: "resource://external-b" }],
+          });
+
+        const firstResult = await mcpClient.listResources(agentId, {
+          tokenId: "external-token-a",
+          teamId: null,
+          isOrganizationToken: false,
+          isExternalIdp: true,
+          userId: "external-user-a",
+        });
+        const secondResult = await mcpClient.listResources(agentId, {
+          tokenId: "external-token-b",
+          teamId: null,
+          isOrganizationToken: false,
+          isExternalIdp: true,
+          userId: "external-user-b",
+        });
+
+        expect(firstResult.resources).toEqual([
+          { uri: "resource://external-a" },
+        ]);
+        expect(secondResult.resources).toEqual([
+          { uri: "resource://external-b" },
+        ]);
+        expect(mockConnect).toHaveBeenCalledTimes(2);
+        expect(mockClose).not.toHaveBeenCalled();
+      });
+
+      const authCodeCases = [
+        {
+          label: "public authorization-code",
+          catalogName: "public-auth-code-mcp",
+          accessToken: "public-auth-code-access-token",
+        },
+        {
+          label: "confidential authorization-code",
+          catalogName: "confidential-auth-code-mcp",
+          accessToken: "confidential-auth-code-access-token",
+          clientSecret: "confidential-client-secret",
+        },
+      ];
+
+      for (const authCodeCase of authCodeCases) {
+        test(`passes Bearer token for ${authCodeCase.label} resources/list`, async ({
+          makeUser,
+        }) => {
+          const user = await makeUser({
+            email: `${authCodeCase.catalogName}@example.com`,
+          });
+          const secret = await secretManager().createSecret(
+            {
+              access_token: authCodeCase.accessToken,
+              refresh_token: `${authCodeCase.catalogName}-refresh-token`,
+              expires_at: Date.now() + 3_600_000,
+            },
+            `${authCodeCase.catalogName}-secret`,
+          );
+          const oauthCatalog = await InternalMcpCatalogModel.create({
+            name: authCodeCase.catalogName,
+            serverType: "remote",
+            serverUrl: `https://${authCodeCase.catalogName}.example.com/mcp/`,
+            oauthConfig: {
+              name: authCodeCase.catalogName,
+              server_url: `https://${authCodeCase.catalogName}.example.com/mcp/`,
+              grant_type: "authorization_code",
+              client_id: `${authCodeCase.catalogName}-client-id`,
+              ...(authCodeCase.clientSecret
+                ? { client_secret: authCodeCase.clientSecret }
+                : {}),
+              redirect_uris: ["http://localhost:3000/oauth-callback"],
+              scopes: ["read"],
+              default_scopes: ["read"],
+              supports_resource_metadata: false,
+              authorization_endpoint: `https://${authCodeCase.catalogName}.example.com/oauth/authorize`,
+              token_endpoint: `https://${authCodeCase.catalogName}.example.com/oauth/token`,
+            },
+          });
+          const oauthServer = await McpServerModel.create({
+            name: authCodeCase.catalogName,
+            catalogId: oauthCatalog.id,
+            secretId: secret.id,
+            serverType: "remote",
+            ownerId: user.id,
+          });
+          const tool = await ToolModel.createToolIfNotExists({
+            name: `${authCodeCase.catalogName}__list_resources`,
+            description: "List resources",
+            parameters: {},
+            catalogId: oauthCatalog.id,
+          });
+          await AgentToolModel.create(agentId, tool.id, {
+            mcpServerId: oauthServer.id,
+            credentialResolutionMode: "static",
+          });
+
+          mockListResources.mockResolvedValueOnce({
+            resources: [{ uri: "resource://example" }],
+          });
+
+          const result = await mcpClient.listResources(agentId, {
+            tokenId: "profile-token",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: user.id,
+          });
+
+          expect(result.resources).toEqual([{ uri: "resource://example" }]);
+          const { StreamableHTTPClientTransport } = await import(
+            "@modelcontextprotocol/sdk/client/streamableHttp.js"
+          );
+          const [, options] =
+            vi.mocked(StreamableHTTPClientTransport).mock.calls.at(-1) ?? [];
+          const headers =
+            options?.requestInit?.headers instanceof Headers
+              ? options.requestInit.headers
+              : new Headers(options?.requestInit?.headers);
+          expect(headers.get("Authorization")).toBe(
+            `Bearer ${authCodeCase.accessToken}`,
+          );
+        });
+      }
+
+      test("passes token-exchange Bearer token for resources/list and rebuilds after credential rotation", async ({
+        makeIdentityProvider,
+        makeOrganization,
+        makeUser,
+      }) => {
+        const organization = await makeOrganization();
+        const user = await makeUser({
+          email: "aggregate-token-exchange@example.com",
+        });
+        const identityProvider = await makeIdentityProvider(organization.id, {
+          providerId: "aggregate-token-exchange-idp",
+          issuer: "https://idp.example.com",
+          oidcConfig: {
+            clientId: "aggregate-web-client",
+            tokenEndpoint: "https://idp.example.com/oauth/token",
+            enterpriseManagedCredentials: {
+              exchangeStrategy: "rfc8693",
+              clientId: "aggregate-agent-client",
+              clientSecret: "aggregate-agent-secret",
+              tokenEndpoint: "https://idp.example.com/oauth/token",
+              tokenEndpointAuthentication: "client_secret_post",
+              subjectTokenType: OAUTH_TOKEN_TYPE.AccessToken,
+            },
+          },
+        });
+        await AgentModel.update(agentId, {
+          organizationId: organization.id,
+          identityProviderId: identityProvider.id,
+        });
+
+        const exchangeCatalog = await InternalMcpCatalogModel.create({
+          name: "aggregate-token-exchange-mcp",
+          serverType: "remote",
+          serverUrl: "https://aggregate-token-exchange.example.com/mcp/",
+          enterpriseManagedConfig: {
+            identityProviderId: identityProvider.id,
+            requestedCredentialType: "bearer_token",
+            resourceIdentifier: "api://aggregate-token-exchange",
+            tokenInjectionMode: "authorization_bearer",
+          },
+        });
+        const exchangeServer = await McpServerModel.create({
+          name: "aggregate-token-exchange-mcp",
+          catalogId: exchangeCatalog.id,
+          secretId: null,
+          serverType: "remote",
+          ownerId: user.id,
+        });
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "aggregate-token-exchange-mcp__list_resources",
+          description: "List resources",
+          parameters: {},
+          catalogId: exchangeCatalog.id,
+        });
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId: exchangeServer.id,
+          credentialResolutionMode: "enterprise_managed",
+        });
+
+        await db.insert(schema.accountsTable).values({
+          id: randomUUID(),
+          accountId: "acct-aggregate-token-exchange",
+          providerId: identityProvider.providerId,
+          userId: user.id,
+          accessToken: "aggregate-login-access-token",
+          accessTokenExpiresAt: new Date(Date.now() + 300_000),
+          idToken: createJwt({ exp: futureExpSeconds() }),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        const downstreamTokens = [
+          "aggregate-downstream-access-token",
+          "aggregate-rotated-downstream-access-token",
+        ];
+        let tokenExchangeCount = 0;
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockImplementation(async (input) => {
+            const url = input instanceof Request ? input.url : input.toString();
+            expect(url).toBe("https://idp.example.com/oauth/token");
+            const accessToken = downstreamTokens[tokenExchangeCount];
+            tokenExchangeCount += 1;
+
+            return new Response(
+              JSON.stringify({
+                access_token: accessToken,
+                expires_in: 300,
+              }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          });
+        try {
+          mockListResources
+            .mockResolvedValueOnce({
+              resources: [{ uri: "resource://exchange" }],
+            })
+            .mockResolvedValueOnce({
+              resources: [{ uri: "resource://exchange-rotated" }],
+            });
+
+          const result = await mcpClient.listResources(agentId, {
+            tokenId: "session-token-a",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: user.id,
+          });
+          const rotatedResult = await mcpClient.listResources(agentId, {
+            tokenId: "session-token-b",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: user.id,
+          });
+
+          expect(result.resources).toEqual([{ uri: "resource://exchange" }]);
+          expect(rotatedResult.resources).toEqual([
+            { uri: "resource://exchange-rotated" },
+          ]);
+          const { StreamableHTTPClientTransport } = await import(
+            "@modelcontextprotocol/sdk/client/streamableHttp.js"
+          );
+          const transportCalls = vi.mocked(StreamableHTTPClientTransport).mock
+            .calls;
+          const [, firstOptions] = transportCalls.at(-2) ?? [];
+          const firstHeaders =
+            firstOptions?.requestInit?.headers instanceof Headers
+              ? firstOptions.requestInit.headers
+              : new Headers(firstOptions?.requestInit?.headers);
+          expect(firstHeaders.get("Authorization")).toBe(
+            "Bearer aggregate-downstream-access-token",
+          );
+          const [, secondOptions] = transportCalls.at(-1) ?? [];
+          const secondHeaders =
+            secondOptions?.requestInit?.headers instanceof Headers
+              ? secondOptions.requestInit.headers
+              : new Headers(secondOptions?.requestInit?.headers);
+          expect(secondHeaders.get("Authorization")).toBe(
+            "Bearer aggregate-rotated-downstream-access-token",
+          );
+          expect(fetchMock).toHaveBeenCalledTimes(2);
+          expect(mockClose).toHaveBeenCalledTimes(1);
+          expect(mockConnect).toHaveBeenCalledTimes(2);
+        } finally {
+          fetchMock.mockRestore();
+        }
       });
     });
 

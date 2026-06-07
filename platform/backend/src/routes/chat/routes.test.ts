@@ -1,3 +1,4 @@
+import { convertToModelMessages } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
 // Mock the ai module before importing chat routes
@@ -10,23 +11,21 @@ vi.mock("ai", async (importOriginal) => {
   };
 });
 
-// Mock createDirectLLMModel to avoid actual API calls
+// Mock createLLMModel to avoid actual API calls
 vi.mock("@/clients/llm-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients/llm-client")>();
   return {
     ...actual,
-    createDirectLLMModel: vi.fn(() => "mocked-model"),
+    createLLMModel: vi.fn(() => "mocked-model"),
   };
 });
 
-// Mock LlmProviderApiKeyModelLinkModel for fast model DB lookup
-const mockGetFastestModel = vi.hoisted(() => vi.fn());
-vi.mock("@/models/llm-provider-api-key-model", () => ({
-  default: { getFastestModel: mockGetFastestModel },
-}));
-
 import { archestraMcpBranding } from "@/archestra-mcp-server";
-import { createDirectLLMModel } from "@/clients/llm-client";
+import { createLLMModel } from "@/clients/llm-client";
+import ConversationModel from "@/models/conversation";
+import MessageModel from "@/models/message";
+import { test } from "@/test";
+import type { ChatMessage } from "@/types";
 import {
   __test,
   buildChatStopConditions,
@@ -193,6 +192,132 @@ describe("prepareMessagesForProvider", () => {
     );
   });
 
+  it("pads bedrock messages that only contain ignored UI data parts", () => {
+    const messages = __test.prepareMessagesForProvider({
+      provider: "bedrock",
+      messages: [
+        {
+          role: "assistant",
+          parts: [
+            {
+              type: "data-token-usage",
+              data: {
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(messages[0].parts).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/\S/),
+      }),
+    );
+  });
+
+  it("pads bedrock messages that only contain step markers and ignored data parts", () => {
+    const messages = __test.prepareMessagesForProvider({
+      provider: "bedrock",
+      messages: [
+        {
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "data-heartbeat",
+              data: { timestamp: 1778603432000 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(messages[0].parts).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/\S/),
+      }),
+    );
+  });
+
+  it("pads bedrock messages that only contain streaming tool input", () => {
+    const messages = __test.prepareMessagesForProvider({
+      provider: "bedrock",
+      messages: [
+        {
+          role: "assistant",
+          parts: [
+            {
+              type: "tool-search",
+              toolCallId: "call_123",
+              toolName: "search",
+              state: "input-streaming",
+              input: { q: "partial" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(messages[0].parts).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/\S/),
+      }),
+    );
+  });
+
+  it("pads empty bedrock assistant step blocks before later tool calls", async () => {
+    const messages = __test.prepareMessagesForProvider({
+      provider: "bedrock",
+      messages: [
+        {
+          role: "assistant",
+          parts: [
+            { type: "text", text: "" },
+            { type: "step-start" },
+            {
+              type: "tool-search",
+              toolCallId: "call_123",
+              toolName: "search",
+              state: "input-available",
+              input: { q: "query" },
+            },
+          ],
+        },
+      ],
+    });
+
+    const stepStartIndex =
+      messages[0].parts?.findIndex((part) => part.type === "step-start") ?? -1;
+    expect(stepStartIndex).toBeGreaterThan(0);
+    expect(messages[0].parts?.[stepStartIndex - 1]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/\S/),
+      }),
+    );
+
+    const modelMessages = await convertToModelMessages(
+      messages as Parameters<typeof convertToModelMessages>[0],
+    );
+    const assistantMessages = modelMessages.filter(
+      (message) => message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages[0]?.content).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringMatching(/\S/),
+      }),
+    );
+  });
+
   it("leaves bedrock assistant messages with a tool-call part untouched", () => {
     const message = {
       role: "assistant" as const,
@@ -232,6 +357,92 @@ describe("prepareMessagesForProvider", () => {
     });
 
     expect(messages[0]).toBe(message);
+  });
+
+  it("leaves bedrock messages with reasoning that carries provider metadata", () => {
+    const message = {
+      role: "assistant" as const,
+      parts: [
+        {
+          type: "reasoning",
+          text: "thinking...",
+          providerMetadata: { bedrock: { signature: "sig-abc" } },
+        },
+      ],
+    };
+
+    const messages = __test.prepareMessagesForProvider({
+      provider: "bedrock",
+      messages: [message],
+    });
+
+    expect(messages[0]).toBe(message);
+  });
+});
+
+describe("buildModelMessagesForProvider", () => {
+  // ref-free messages never hit the attachment table, so these run without DB.
+  const conversationId = "conv-model-prep";
+
+  it("drops an assistant turn that converts to empty model content", async () => {
+    const modelMessages = await __test.buildModelMessagesForProvider({
+      provider: "openai",
+      conversationId,
+      messages: [
+        { role: "user", parts: [{ type: "text", text: "hi" }] },
+        {
+          // only provider-invisible parts — convertToModelMessages yields an
+          // assistant message with empty content here.
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "data-tool-ui-start",
+              data: { toolCallId: "call_x", toolName: "render_chart" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(modelMessages.map((message) => message.role)).toEqual(["user"]);
+  });
+
+  it("keeps normal text and tool assistant turns", async () => {
+    const modelMessages = await __test.buildModelMessagesForProvider({
+      provider: "openai",
+      conversationId,
+      messages: [
+        { role: "user", parts: [{ type: "text", text: "search please" }] },
+        {
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "tool-search",
+              toolCallId: "call_ok",
+              toolName: "search",
+              state: "output-available",
+              input: { q: "query" },
+              output: { hits: [] },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          parts: [{ type: "text", text: "Here are the results." }],
+        },
+      ],
+    });
+
+    const assistantMessages = modelMessages.filter(
+      (message) => message.role === "assistant",
+    );
+    // the tool-call turn and the text turn both survive.
+    expect(assistantMessages.length).toBeGreaterThanOrEqual(2);
+    expect(assistantMessages.at(-1)?.content).toContainEqual(
+      expect.objectContaining({ type: "text", text: "Here are the results." }),
+    );
   });
 });
 
@@ -317,6 +528,324 @@ describe("getMessagesNotYetPersisted", () => {
 
     expect(newMessages).toHaveLength(1);
     expect(newMessages[0]?.id).toBe("assistant-1");
+  });
+
+  it("does not re-persist live messages linked by persisted message metadata", () => {
+    const newMessages = __test.getMessagesNotYetPersisted({
+      existingMessages: [
+        {
+          id: "22222222-2222-2222-2222-222222222222",
+          content: {
+            id: "",
+            role: "assistant",
+            parts: [{ type: "text", text: "already saved" }],
+          },
+        },
+      ],
+      uiMessages: [
+        {
+          id: "live-assistant-1",
+          role: "assistant",
+          metadata: {
+            persistedMessageId: "22222222-2222-2222-2222-222222222222",
+          },
+          parts: [{ type: "text", text: "already saved" }],
+        } as ChatMessage,
+        {
+          id: "new-user-1",
+          role: "user",
+          parts: [{ type: "text", text: "next" }],
+        },
+      ],
+    });
+
+    expect(newMessages).toHaveLength(1);
+    expect(newMessages[0]?.id).toBe("new-user-1");
+  });
+
+  it("does not re-persist an assistant message saved with an empty content id", () => {
+    const newMessages = __test.getMessagesNotYetPersisted({
+      existingMessages: [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          content: {
+            id: "",
+            role: "assistant",
+            parts: [
+              { type: "step-start" },
+              {
+                type: "text",
+                text: "Hello! I see you've started a new chat.",
+                state: "done",
+              },
+            ],
+          },
+        },
+      ],
+      uiMessages: [
+        {
+          id: "assistant-temp-id",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "text",
+              text: "Hello! I see you've started a new chat.",
+              state: "done",
+            },
+            {
+              type: "data-token-usage",
+              data: { inputTokens: 10, outputTokens: 20 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(newMessages).toHaveLength(0);
+  });
+
+  it("consumes empty content id fallback matches so later repeated text is still persisted", () => {
+    const newMessages = __test.getMessagesNotYetPersisted({
+      existingMessages: [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          content: {
+            id: "",
+            role: "assistant",
+            parts: [
+              { type: "step-start" },
+              { type: "text", text: "Of course!", state: "done" },
+            ],
+          },
+        },
+      ],
+      uiMessages: [
+        {
+          id: "assistant-temp-id",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            { type: "text", text: "Of course!", state: "done" },
+            {
+              type: "data-token-usage",
+              data: { inputTokens: 10, outputTokens: 20 },
+            },
+          ],
+        },
+        {
+          id: "user-2",
+          role: "user",
+          parts: [{ type: "text", text: "say it again" }],
+        },
+        {
+          id: "assistant-2",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            { type: "text", text: "Of course!", state: "done" },
+          ],
+        },
+      ],
+    });
+
+    expect(newMessages.map((message) => message.id)).toEqual([
+      "user-2",
+      "assistant-2",
+    ]);
+  });
+});
+
+describe("persistNewMessages", () => {
+  // Regression coverage for #4030: approving or declining a tool and then
+  // reloading must restore the resolved turn. The real flow persists four
+  // times — the user message and the assistant turn are saved during the
+  // first request, then the approval resume re-sends the same turn, which
+  // must update the existing assistant row in place rather than appending
+  // duplicate rows and orphaning the original approval-requested row.
+  const userMessage = {
+    id: "user-1",
+    role: "user",
+    parts: [{ type: "text", text: "Run the print test tool." }],
+  };
+
+  const printToolPart = {
+    type: "tool-print_test",
+    toolCallId: "call-1",
+    input: {},
+  };
+
+  const approvalRequested = {
+    id: "assistant-1",
+    role: "assistant",
+    parts: [{ ...printToolPart, state: "approval-requested" }],
+  };
+
+  // The approval resume re-sends the assistant turn with the answer applied.
+  const approvalResponded = {
+    id: "assistant-1",
+    role: "assistant",
+    parts: [{ ...printToolPart, state: "approval-responded" }],
+  };
+
+  const resolvedCases = [
+    {
+      decision: "approved",
+      toolState: "output-available",
+      resolvedAssistant: {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          {
+            ...printToolPart,
+            state: "output-available",
+            output: { result: ["archestra-4030-repro"] },
+          },
+          { type: "text", text: "The print test tool ran successfully." },
+        ],
+      },
+    },
+    {
+      decision: "declined",
+      toolState: "output-denied",
+      resolvedAssistant: {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { ...printToolPart, state: "output-denied" },
+          { type: "text", text: "Understood, I will not run that tool." },
+        ],
+      },
+    },
+  ];
+
+  for (const testCase of resolvedCases) {
+    test(`reconciles the resolved turn after a tool call is ${testCase.decision}, without duplicate rows (#4030)`, async ({
+      makeUser,
+      makeOrganization,
+      makeMember,
+      makeAgent,
+    }) => {
+      const user = await makeUser();
+      const organization = await makeOrganization();
+      await makeMember(user.id, organization.id, { role: "admin" });
+      const agent = await makeAgent({
+        organizationId: organization.id,
+        authorId: user.id,
+        scope: "personal",
+      });
+      const conversation = await ConversationModel.create({
+        userId: user.id,
+        organizationId: organization.id,
+        agentId: agent.id,
+        selectedModel: "gpt-4o",
+        selectedProvider: "openai",
+      });
+
+      // First request: the user message is persisted early, then the
+      // assistant turn is persisted on finish while the tool waits for
+      // approval.
+      await __test.persistNewMessages(
+        conversation.id,
+        [userMessage],
+        "earlyUserMsg",
+      );
+      await __test.persistNewMessages(
+        conversation.id,
+        [userMessage, approvalRequested],
+        "onFinish",
+      );
+
+      // Resume request: the client re-sends the answered turn. The early
+      // persist must not duplicate it, and the finish persist must update
+      // the existing assistant row to its resolved state.
+      await __test.persistNewMessages(
+        conversation.id,
+        [userMessage, approvalResponded],
+        "earlyUserMsg",
+      );
+      await __test.persistNewMessages(
+        conversation.id,
+        [userMessage, testCase.resolvedAssistant],
+        "onFinish",
+      );
+
+      const stored = await MessageModel.findByConversation(conversation.id);
+      expect(stored.filter((row) => row.role === "user")).toHaveLength(1);
+
+      const assistantRows = stored.filter((row) => row.role === "assistant");
+      expect(assistantRows).toHaveLength(1);
+
+      const storedParts: Array<Record<string, unknown>> =
+        assistantRows[0]?.content?.parts ?? [];
+      const resolvedToolPart = storedParts.find(
+        (part) => part.toolCallId === "call-1",
+      );
+      expect(resolvedToolPart?.state).toBe(testCase.toolState);
+      expect(storedParts.some((part) => part.type === "text")).toBe(true);
+    });
+  }
+});
+
+describe("getMessagesWithChangedContent", () => {
+  it("only updates rows still in approval-requested state, matched by toolCallId", () => {
+    // The narrow scope: this update path resolves an approval-requested tool
+    // call by toolCallId. Unrelated content changes on other rows are ignored
+    // so a client can't repurpose this path to overwrite earlier messages —
+    // those edits still go through updateTextPartAndDeleteSubsequent.
+    const changed = __test.getMessagesWithChangedContent({
+      existingMessages: [
+        {
+          id: "db-text",
+          content: {
+            id: "user-1",
+            role: "user",
+            parts: [{ type: "text", text: "hello" }],
+          },
+        },
+        {
+          id: "db-pending",
+          content: {
+            id: "assistant-1",
+            role: "assistant",
+            parts: [
+              {
+                type: "tool-print_test",
+                toolCallId: "call-1",
+                state: "approval-requested",
+                input: {},
+              },
+            ],
+          },
+        },
+      ],
+      uiMessages: [
+        // Unrelated text edit — must be ignored.
+        {
+          id: "user-1",
+          role: "user",
+          parts: [{ type: "text", text: "hello (edited)" }],
+        },
+        // Resolved version of the approval-requested call.
+        {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [
+            {
+              type: "tool-print_test",
+              toolCallId: "call-1",
+              state: "output-available",
+              input: {},
+              output: { ok: true },
+            },
+            { type: "text", text: "done" },
+          ],
+        },
+      ],
+    });
+
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.id).toBe("db-pending");
   });
 });
 
@@ -477,8 +1006,7 @@ describe("buildTitlePrompt", () => {
 
     expect(prompt).toContain("User: How do I create a React component?");
     expect(prompt).not.toContain("Assistant:");
-    expect(prompt).toContain("Generate a short, concise title");
-    expect(prompt).toContain("3-6 words");
+    expect(prompt).toContain("Chat conversation messages:");
   });
 
   it("builds prompt with both user and assistant messages", () => {
@@ -493,12 +1021,12 @@ describe("buildTitlePrompt", () => {
     );
   });
 
-  it("includes instructions for title format", () => {
+  it("leaves title formatting instructions to the system prompt", () => {
     const prompt = buildTitlePrompt("Hello", "Hi there");
 
-    expect(prompt).toContain("Respond with ONLY the title");
-    expect(prompt).toContain("no quotes");
-    expect(prompt).toContain("no explanation");
+    expect(prompt).toContain("User: Hello");
+    expect(prompt).toContain("Assistant: Hi there");
+    expect(prompt).not.toContain("Respond with ONLY the title");
   });
 });
 
@@ -531,7 +1059,12 @@ describe("generateConversationTitle", () => {
     const result = await generateConversationTitle({
       provider: "anthropic",
       apiKey: "test-key",
+      modelName: "claude-test",
       baseUrl: null,
+      agentId: "title-agent-id",
+      userId: "user-id",
+      conversationId: "conversation-id",
+      systemPrompt: "Generate a title.",
       firstUserMessage: "Help me debug this React error",
       firstAssistantMessage: "I can help with that.",
     });
@@ -551,7 +1084,12 @@ describe("generateConversationTitle", () => {
     const result = await generateConversationTitle({
       provider: "anthropic",
       apiKey: "test-key",
+      modelName: "claude-test",
       baseUrl: null,
+      agentId: "title-agent-id",
+      userId: "user-id",
+      conversationId: "conversation-id",
+      systemPrompt: "Generate a title.",
       firstUserMessage: "Hello",
       firstAssistantMessage: "Hi there!",
     });
@@ -567,7 +1105,12 @@ describe("generateConversationTitle", () => {
     const result = await generateConversationTitle({
       provider: "openai",
       apiKey: "test-key",
+      modelName: "gpt-test",
       baseUrl: null,
+      agentId: "title-agent-id",
+      userId: "user-id",
+      conversationId: "conversation-id",
+      systemPrompt: "Generate a title.",
       firstUserMessage: "Test",
       firstAssistantMessage: "",
     });
@@ -575,79 +1118,37 @@ describe("generateConversationTitle", () => {
     expect(result).toBe("Title With Whitespace");
   });
 
-  it("uses fastest model from DB when chatApiKeyId is provided", async () => {
-    mockGetFastestModel.mockResolvedValueOnce({ modelId: "db-fast-model" });
-    mockGenerateText.mockResolvedValueOnce({ text: "DB Model Title" });
+  it("uses the resolved built-in agent model and system prompt", async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: "Configured Model Title" });
 
     const result = await generateConversationTitle({
       provider: "anthropic",
       apiKey: "test-key",
-      chatApiKeyId: "api-key-123",
+      modelName: "configured-title-model",
       baseUrl: null,
+      agentId: "title-agent-id",
+      userId: "user-id",
+      conversationId: "conversation-id",
+      systemPrompt: "Return only a title.",
       firstUserMessage: "Hello",
       firstAssistantMessage: "Hi!",
     });
 
-    expect(result).toBe("DB Model Title");
-    expect(mockGetFastestModel).toHaveBeenCalledWith("api-key-123");
-    expect(createDirectLLMModel).toHaveBeenCalledWith(
-      expect.objectContaining({ modelName: "db-fast-model" }),
+    expect(result).toBe("Configured Model Title");
+    expect(createLLMModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "title-agent-id",
+        modelName: "configured-title-model",
+        userId: "user-id",
+        sessionId: "conversation-id",
+        source: "chat:title_generation",
+      }),
     );
-  });
-
-  it("falls back to FAST_MODELS when no chatApiKeyId", async () => {
-    mockGenerateText.mockResolvedValueOnce({ text: "Fallback Title" });
-
-    await generateConversationTitle({
-      provider: "anthropic",
-      apiKey: "test-key",
-      baseUrl: null,
-      firstUserMessage: "Hello",
-      firstAssistantMessage: "Hi!",
+    expect(mockGenerateText).toHaveBeenCalledWith({
+      model: "mocked-model",
+      system: "Return only a title.",
+      prompt: "Chat conversation messages:\n\nUser: Hello\n\nAssistant: Hi!",
     });
-
-    expect(mockGetFastestModel).not.toHaveBeenCalled();
-    expect(createDirectLLMModel).toHaveBeenCalledWith(
-      expect.objectContaining({ modelName: "claude-haiku-4-5-20251001" }),
-    );
-  });
-
-  it("falls back to FAST_MODELS when getFastestModel returns null", async () => {
-    mockGetFastestModel.mockResolvedValueOnce(null);
-    mockGenerateText.mockResolvedValueOnce({ text: "Null Fallback Title" });
-
-    await generateConversationTitle({
-      provider: "openai",
-      apiKey: "test-key",
-      chatApiKeyId: "api-key-456",
-      baseUrl: null,
-      firstUserMessage: "Hello",
-      firstAssistantMessage: "Hi!",
-    });
-
-    expect(mockGetFastestModel).toHaveBeenCalledWith("api-key-456");
-    expect(createDirectLLMModel).toHaveBeenCalledWith(
-      expect.objectContaining({ modelName: "gpt-4o-mini" }),
-    );
-  });
-
-  it("falls back to FAST_MODELS when getFastestModel throws", async () => {
-    mockGetFastestModel.mockRejectedValueOnce(new Error("DB Error"));
-    mockGenerateText.mockResolvedValueOnce({ text: "Error Fallback Title" });
-
-    await generateConversationTitle({
-      provider: "gemini",
-      apiKey: "test-key",
-      chatApiKeyId: "api-key-789",
-      baseUrl: null,
-      firstUserMessage: "Hello",
-      firstAssistantMessage: "Hi!",
-    });
-
-    expect(mockGetFastestModel).toHaveBeenCalledWith("api-key-789");
-    expect(createDirectLLMModel).toHaveBeenCalledWith(
-      expect.objectContaining({ modelName: "gemini-2.0-flash-001" }),
-    );
   });
 });
 

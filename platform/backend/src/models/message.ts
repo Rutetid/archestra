@@ -1,6 +1,10 @@
 import { and, eq, gt, sql } from "drizzle-orm";
-import db, { schema } from "@/database";
+import db, { schema, withDbTransaction } from "@/database";
 import type { InsertMessage, Message } from "@/types";
+
+type DbExecutor =
+  | typeof db
+  | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 class MessageModel {
   /**
@@ -12,7 +16,7 @@ class MessageModel {
   ): Promise<void> {
     await db
       .update(schema.conversationsTable)
-      .set({ updatedAt: new Date() })
+      .set({ updatedAt: new Date(), lastMessageAt: new Date() })
       .where(eq(schema.conversationsTable.id, conversationId));
   }
 
@@ -149,6 +153,33 @@ class MessageModel {
     return updatedMessage;
   }
 
+  /**
+   * Replace a message's full content. Used when a turn changes after it was
+   * first persisted — e.g. a tool call that has since been approved or declined.
+   */
+  static async updateContent(
+    messageId: string,
+    content: Message["content"],
+  ): Promise<Message> {
+    // Validate the row exists so the return type holds — `.returning()`
+    // would otherwise yield `undefined` for an unknown id.
+    const message = await MessageModel.findById(messageId);
+    if (!message) {
+      throw new Error("Message not found");
+    }
+
+    const [updatedMessage] = await db
+      .update(schema.messagesTable)
+      .set({
+        content,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.messagesTable.id, messageId))
+      .returning();
+
+    return updatedMessage;
+  }
+
   static async deleteAfterMessage(
     conversationId: string,
     messageId: string,
@@ -178,16 +209,17 @@ class MessageModel {
 
   /**
    * Update a text part and optionally delete subsequent messages atomically.
-   * Uses a transaction to ensure both operations succeed or fail together.
+   * Accepts an optional executor so callers can compose this with other writes
+   * (e.g. compaction invalidation) inside a single outer transaction.
    */
   static async updateTextPartAndDeleteSubsequent(
     messageId: string,
     partIndex: number,
     newText: string,
     deleteSubsequent: boolean,
+    executor: DbExecutor = db,
   ): Promise<Message> {
-    return await db.transaction(async (tx) => {
-      // Fetch the current message within transaction
+    const run = async (tx: DbExecutor): Promise<Message> => {
       const [message] = await tx
         .select()
         .from(schema.messagesTable)
@@ -238,7 +270,13 @@ class MessageModel {
       }
 
       return updatedMessage;
-    });
+    };
+
+    // when no outer transaction is provided, wrap so update + delete remain atomic
+    if (executor === db) {
+      return await withDbTransaction(async (tx) => run(tx));
+    }
+    return await run(executor);
   }
 }
 

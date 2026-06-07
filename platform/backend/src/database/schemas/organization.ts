@@ -2,8 +2,8 @@ import type {
   OrganizationCustomFont,
   OrganizationTheme,
   SupportedProvider,
-} from "@shared";
-import { DEFAULT_OAUTH_ACCESS_TOKEN_LIFETIME_SECONDS } from "@shared";
+} from "@archestra/shared";
+import { DEFAULT_OAUTH_ACCESS_TOKEN_LIFETIME_SECONDS } from "@archestra/shared";
 import {
   boolean,
   integer,
@@ -17,23 +17,27 @@ import {
 import type {
   ConnectionBaseUrl,
   GlobalToolPolicy,
+  LimitCleanupInterval,
+  NetworkPolicy,
   OnboardingWizard,
   OrganizationChatLink,
   OrganizationCompressionScope,
-  OrganizationLimitCleanupInterval,
 } from "@/types";
+import modelsTable from "./model";
 
 const organizationsTable = pgTable("organization", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
+  analyticsInstanceId: uuid("analytics_instance_id").notNull().defaultRandom(),
+  analyticsInstanceStartedAt: timestamp("analytics_instance_started_at"),
+  analyticsInstanceLastHeartbeatAt: timestamp(
+    "analytics_instance_last_heartbeat_at",
+  ),
   logo: text("logo"),
   logoDark: text("logo_dark"),
   createdAt: timestamp("created_at").notNull(),
   metadata: text("metadata"),
-  limitCleanupInterval: varchar("limit_cleanup_interval")
-    .$type<OrganizationLimitCleanupInterval>()
-    .default("1h"),
   onboardingComplete: boolean("onboarding_complete").notNull().default(false),
   theme: text("theme")
     .$type<OrganizationTheme>()
@@ -89,17 +93,34 @@ const organizationsTable = pgTable("organization", {
   /** LLM model used for reranking (e.g. "gpt-4o") */
   rerankerModel: text("reranker_model"),
 
-  /** Organization-wide default LLM model ID (e.g. "gpt-4o") */
+  /** @deprecated Superseded by `defaultModelId` (FK). Retained, no longer read or written. */
   defaultLlmModel: text("default_llm_model"),
-
-  /** Provider for the default LLM model (e.g. "openai") */
+  /** @deprecated Superseded by `defaultModelId` (FK). Retained, no longer read or written. */
   defaultLlmProvider: text("default_llm_provider").$type<SupportedProvider>(),
+
+  /** Organization-wide default model. FK to models(id) ON DELETE SET NULL. */
+  defaultModelId: uuid("default_model_id").references(() => modelsTable.id, {
+    onDelete: "set null",
+  }),
 
   /**
    * Chat API key used for the default LLM model.
    * FK to chat_api_keys(id) ON DELETE SET NULL — enforced by migration only (same circular issue).
    */
   defaultLlmApiKeyId: uuid("default_llm_api_key_id"),
+
+  /** Default token-cost limit value applied to every organization member. */
+  defaultUserLimitValue: integer("default_user_limit_value"),
+
+  /** Models covered by the default user limit. Null means all models. */
+  defaultUserLimitModel: jsonb("default_user_limit_model").$type<
+    string[] | null
+  >(),
+
+  /** Cleanup interval used by default user limits. Null falls back to weekly. */
+  defaultUserLimitCleanupInterval: varchar(
+    "default_user_limit_cleanup_interval",
+  ).$type<LimitCleanupInterval>(),
 
   /**
    * Organization-wide default agent ID (fallback when member has no personal default).
@@ -134,8 +155,11 @@ const organizationsTable = pgTable("organization", {
     .notNull()
     .default(true),
 
-  /** Square icon logo (28x28px recommended) for collapsed sidebar and chat loading indicator */
+  /** Square icon logo (28x28px recommended) for collapsed sidebar and chat loading indicator. PNG or SVG. */
   iconLogo: text("icon_logo"),
+
+  /** Dark-mode variant of the icon logo. Falls back to `iconLogo` when not set. */
+  iconLogoDark: text("icon_logo_dark"),
 
   /** Support contact message shown in chat error cards */
   chatErrorSupportMessage: text("chat_error_support_message"),
@@ -195,6 +219,83 @@ const organizationsTable = pgTable("organization", {
   connectionBaseUrls: jsonb("connection_base_urls").$type<
     ConnectionBaseUrl[]
   >(),
+
+  /**
+   * Legacy preset columns (feature removed) — retained inert (non-destructive,
+   * no migration) and no longer read or written. Held admin-chosen singular/
+   * plural labels that the catalog UI used to override "Preset"/"presets" copy.
+   */
+  presetEntityName: text("preset_entity_name"),
+  presetEntityNamePlural: text("preset_entity_name_plural"),
+
+  /**
+   * Legacy preset column (feature removed) — retained inert. Held the custom
+   * display label for the implicit "default" preset row. No longer read or
+   * written.
+   */
+  presetEntityDefaultLabel: text("preset_entity_default_label"),
+
+  /**
+   * Display name of the implicit "default" environment (the deployment target
+   * referenced by internal_mcp_catalog.environment_id = null). NULL falls back
+   * to "Default" in the UI.
+   */
+  defaultEnvironmentName: text("default_environment_name"),
+
+  /**
+   * Kubernetes namespace for the implicit "default" environment. Stored only
+   * (not applied at deploy yet). NULL = unset.
+   */
+  defaultEnvironmentNamespace: text("default_environment_namespace"),
+
+  /**
+   * Optional human-readable description of the implicit "default" environment,
+   * shown in the environment selector. NULL = unset.
+   */
+  defaultEnvironmentDescription: text("default_environment_description"),
+
+  /**
+   * Optional default network egress policy for the implicit "default"
+   * environment. NULL falls back to built-in unrestricted behavior.
+   */
+  defaultNetworkPolicy: jsonb("default_network_policy").$type<NetworkPolicy>(),
+
+  /**
+   * When true, assigning a catalog item to the implicit "default" environment
+   * (environment_id = null) requires the `environment:admin` permission — i.e.
+   * creating a catalog item without choosing an environment is admin-gated.
+   * Mirrors the per-environment `environment.restricted` flag for the default.
+   */
+  defaultEnvironmentRestricted: boolean("default_environment_restricted")
+    .notNull()
+    .default(false),
+
+  /**
+   * When true, the Agent Skill tools (`list_skills`, `activate_skill`,
+   * `read_skill_file`) are assigned to every agent in the org and added to all
+   * new agents. Flipped on
+   * by the "Enable and create a new skill" empty-state button on /agents/skills.
+   */
+  skillToolsEnabled: boolean("skill_tools_enabled").notNull().default(false),
+
+  /**
+   * When true, the org's skills are exposed in chat as slash commands
+   * (`/skill-name`). Invoking one injects the skill's content directly into the
+   * conversation, independent of `skillToolsEnabled` (which only governs the
+   * model-facing `activate_skill` tool).
+   */
+  skillSlashCommandsEnabled: boolean("skill_slash_commands_enabled")
+    .notNull()
+    .default(false),
+
+  /**
+   * Legacy preset column (feature removed) — retained inert. Held a validation
+   * regex (no delimiters/flags) applied to default-scoped field values at
+   * install time. No longer read or written.
+   */
+  presetEntityDefaultValidationRegex: text(
+    "preset_entity_default_validation_regex",
+  ),
 });
 
 export default organizationsTable;

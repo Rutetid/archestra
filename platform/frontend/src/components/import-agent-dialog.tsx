@@ -1,6 +1,6 @@
 "use client";
 
-import type { archestraApiTypes } from "@shared";
+import type { archestraApiTypes } from "@archestra/shared";
 import {
   AlertTriangle,
   BookOpen,
@@ -565,17 +565,6 @@ export function ImportAgentDialog({
                     </div>
                   )}
                 </div>
-                {state.payload.agent.llmModel && (
-                  <p className="text-xs text-muted-foreground mt-4 border-t pt-4">
-                    Model:{" "}
-                    <code className="rounded bg-muted px-1 py-0.5">
-                      {state.payload.agent.llmModel}
-                    </code>
-                    <span className="ml-1 opacity-60">
-                      (informational — not auto-configured)
-                    </span>
-                  </p>
-                )}
               </div>
 
               <p className="text-xs text-muted-foreground">

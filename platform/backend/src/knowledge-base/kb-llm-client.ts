@@ -2,8 +2,8 @@ import type {
   EmbeddingModel,
   ModelInputModality,
   SupportedProvider,
-} from "@shared";
-import { DEFAULT_PROVIDER_BASE_URLS } from "@shared";
+} from "@archestra/shared";
+import { DEFAULT_PROVIDER_BASE_URLS } from "@archestra/shared";
 import { createDirectLLMModel, type LLMModel } from "@/clients/llm-client";
 import logger from "@/logging";
 import {
@@ -139,6 +139,7 @@ export async function resolveApiKeyFromChatApiKey(
 
   // Fall back to the provider's default base URL when none is configured on the key
   const baseUrl =
+    chatApiKey.inferenceBaseUrl ||
     chatApiKey.baseUrl ||
     DEFAULT_PROVIDER_BASE_URLS[chatApiKey.provider] ||
     null;

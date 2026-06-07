@@ -5,7 +5,7 @@ import {
   type ArchestraToolShortName,
   DEFAULT_ARCHESTRA_TOOL_NAMES,
   getArchestraToolShortName,
-} from "@shared";
+} from "@archestra/shared";
 import { getArchestraMcpTools } from "@/archestra-mcp-server";
 import { toolShortNames as knowledgeManagementToolShortNames } from "@/archestra-mcp-server/knowledge-management";
 import { TOOL_PERMISSIONS } from "@/archestra-mcp-server/rbac";
@@ -30,6 +30,9 @@ enum ToolGroup {
   KnowledgeManagement = "Knowledge Management",
   Chat = "Chat",
   Meta = "Meta",
+  CodeExecution = "Code Execution",
+  Skills = "Skills",
+  SkillSandbox = "Skill Sandbox",
 }
 
 const groupOrder: Record<ToolGroup, number> = {
@@ -44,6 +47,9 @@ const groupOrder: Record<ToolGroup, number> = {
   [ToolGroup.KnowledgeManagement]: 8,
   [ToolGroup.Chat]: 9,
   [ToolGroup.Meta]: 10,
+  [ToolGroup.CodeExecution]: 11,
+  [ToolGroup.Skills]: 12,
+  [ToolGroup.SkillSandbox]: 13,
 };
 
 /**
@@ -126,6 +132,16 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
 
   search_tools: ToolGroup.Meta,
   run_tool: ToolGroup.Meta,
+
+  list_skills: ToolGroup.Skills,
+  activate_skill: ToolGroup.Skills,
+  read_skill_file: ToolGroup.Skills,
+  create_skill: ToolGroup.Skills,
+  update_skill: ToolGroup.Skills,
+
+  run_command: ToolGroup.SkillSandbox,
+  download_file: ToolGroup.SkillSandbox,
+  upload_file: ToolGroup.SkillSandbox,
 };
 
 // === Script entry point ===

@@ -1,8 +1,9 @@
 import {
   AUTO_PROVISIONED_INVITATION_STATUS,
   addNomicTaskPrefix,
+  isModelSelectionComplete,
   RouteId,
-} from "@shared";
+} from "@archestra/shared";
 import { and, eq, inArray, like } from "drizzle-orm";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -36,6 +37,7 @@ import {
   UpdateAppearanceSettingsSchema,
   UpdateAuthSettingsSchema,
   UpdateConnectionSettingsSchema,
+  UpdateDefaultEnvironmentSchema,
   UpdateKnowledgeSettingsSchema,
   UpdateLlmSettingsSchema,
   UpdateSecuritySettingsSchema,
@@ -138,14 +140,31 @@ const organizationRoutes: FastifyPluginAsyncZod = async (fastify) => {
       schema: {
         operationId: RouteId.UpdateLlmSettings,
         description:
-          "Update LLM settings (TOON compression, compression scope, limit cleanup interval)",
+          "Update LLM settings (TOON compression, compression scope, default user limit)",
         tags: ["Organization"],
         body: UpdateLlmSettingsSchema,
         response: constructResponseSchema(SelectOrganizationSchema),
       },
     },
     async ({ organizationId, body }, reply) => {
-      const organization = await OrganizationModel.patch(organizationId, body);
+      const normalizedBody =
+        body.defaultUserLimitValue === null
+          ? {
+              ...body,
+              defaultUserLimitModel: null,
+              defaultUserLimitCleanupInterval: null,
+            }
+          : {
+              ...body,
+              ...(body.defaultUserLimitModel?.length === 0
+                ? { defaultUserLimitModel: null }
+                : {}),
+            };
+
+      const organization = await OrganizationModel.patch(
+        organizationId,
+        normalizedBody,
+      );
 
       if (!organization) {
         throw new ApiError(404, "Organization not found");
@@ -160,7 +179,8 @@ const organizationRoutes: FastifyPluginAsyncZod = async (fastify) => {
     {
       schema: {
         operationId: RouteId.UpdateAgentSettings,
-        description: "Update agent settings (default model, default agent)",
+        description:
+          "Update agent settings (default model, default agent, skill slash commands)",
         tags: ["Organization"],
         body: UpdateAgentSettingsSchema,
         response: constructResponseSchema(SelectOrganizationSchema),
@@ -176,10 +196,50 @@ const organizationRoutes: FastifyPluginAsyncZod = async (fastify) => {
         }
       }
 
+      // The default model and its API key are a pair: persist both or neither.
+      // Validate the merged result only when this update touches either field.
+      if (
+        body.defaultModelId !== undefined ||
+        body.defaultLlmApiKeyId !== undefined
+      ) {
+        const currentOrg = await OrganizationModel.getById(organizationId);
+        const mergedModelId =
+          body.defaultModelId !== undefined
+            ? body.defaultModelId
+            : (currentOrg?.defaultModelId ?? null);
+        const mergedApiKeyId =
+          body.defaultLlmApiKeyId !== undefined
+            ? body.defaultLlmApiKeyId
+            : (currentOrg?.defaultLlmApiKeyId ?? null);
+        if (
+          !isModelSelectionComplete({
+            modelId: mergedModelId,
+            apiKeyId: mergedApiKeyId,
+          })
+        ) {
+          throw new ApiError(
+            400,
+            "The default model and API key must be set together",
+          );
+        }
+      }
+
       if (body.defaultAgentId) {
         const agent = await AgentModel.findById(body.defaultAgentId);
         if (!agent || agent.organizationId !== organizationId) {
           throw new ApiError(404, "Agent not found");
+        }
+      }
+
+      // Skill slash commands inject skill content that points at read_skill_file,
+      // so they require the skill tools to be enabled for the organization.
+      if (body.skillSlashCommandsEnabled === true) {
+        const currentOrg = await OrganizationModel.getById(organizationId);
+        if (!currentOrg?.skillToolsEnabled) {
+          throw new ApiError(
+            400,
+            "Enable skills for this organization before exposing them as slash commands",
+          );
         }
       }
 
@@ -234,6 +294,55 @@ const organizationRoutes: FastifyPluginAsyncZod = async (fastify) => {
       }
 
       const organization = await OrganizationModel.patch(organizationId, body);
+
+      if (!organization) {
+        throw new ApiError(404, "Organization not found");
+      }
+
+      return reply.send(organization);
+    },
+  );
+
+  fastify.patch(
+    "/api/organization/default-environment",
+    {
+      schema: {
+        operationId: RouteId.UpdateDefaultEnvironment,
+        description:
+          "Configure the implicit default environment (the deployment target referenced by internal_mcp_catalog.environment_id = null). Pass null for name to reset to the built-in 'Default' label, or null for namespace to unset it. Omitted fields are left unchanged.",
+        tags: ["Organization"],
+        body: UpdateDefaultEnvironmentSchema,
+        response: constructResponseSchema(SelectOrganizationSchema),
+      },
+    },
+    async ({ organizationId, body }, reply) => {
+      // Map the clean API shape to DB columns, including only keys that are
+      // present in the body so omitting a field leaves it unchanged (an
+      // explicit null clears the column).
+      const data: Partial<{
+        defaultEnvironmentName: string | null;
+        defaultEnvironmentDescription: string | null;
+        defaultEnvironmentNamespace: string | null;
+        defaultNetworkPolicy: typeof body.networkPolicy;
+        defaultEnvironmentRestricted: boolean;
+      }> = {};
+      if ("name" in body) {
+        data.defaultEnvironmentName = body.name ?? null;
+      }
+      if ("description" in body) {
+        data.defaultEnvironmentDescription = body.description ?? null;
+      }
+      if ("namespace" in body) {
+        data.defaultEnvironmentNamespace = body.namespace ?? null;
+      }
+      if ("networkPolicy" in body) {
+        data.defaultNetworkPolicy = body.networkPolicy ?? null;
+      }
+      if ("restricted" in body) {
+        data.defaultEnvironmentRestricted = body.restricted ?? false;
+      }
+
+      const organization = await OrganizationModel.patch(organizationId, data);
 
       if (!organization) {
         throw new ApiError(404, "Organization not found");

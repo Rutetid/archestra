@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: test
-import { AGENT_TOOL_PREFIX, slugify } from "@shared";
+import { AGENT_TOOL_PREFIX, slugify } from "@archestra/shared";
 import { vi } from "vitest";
 import { ToolModel } from "@/models";
 import { beforeEach, describe, expect, test } from "@/test";
@@ -115,6 +115,112 @@ describe("delegation tool execution", () => {
         userId: "system",
         parentDelegationChain: testAgent.id,
         parentContextIsTrusted: false,
+      }),
+    );
+  });
+
+  test("uses the caller user when the gateway token is not user-scoped", async ({
+    makeAgent,
+    makeAgentTool,
+    makeMember,
+    makeOrganization,
+    makeUser,
+  }) => {
+    const organization = await makeOrganization();
+    const user = await makeUser();
+    await makeMember(user.id, organization.id, { role: "admin" });
+    testAgent = await makeAgent({
+      name: "Parent Agent",
+      agentType: "agent",
+      organizationId: organization.id,
+      scope: "personal",
+      authorId: user.id,
+    });
+    const targetAgent = await makeAgent({
+      name: "Delegated Agent",
+      agentType: "agent",
+      organizationId: organization.id,
+      scope: "personal",
+      authorId: user.id,
+    });
+    const delegationTool = await ToolModel.findOrCreateDelegationTool(
+      targetAgent.id,
+    );
+    await makeAgentTool(testAgent.id, delegationTool.id);
+
+    mockExecuteA2AMessage.mockResolvedValue({
+      messageId: "subagent-message-user-context",
+      text: "Handled by subagent",
+      finishReason: "stop",
+    });
+
+    const result = await executeArchestraTool(
+      `${AGENT_TOOL_PREFIX}${slugify(targetAgent.name)}`,
+      { message: "Write the requested artifact." },
+      {
+        agent: { id: testAgent.id, name: testAgent.name },
+        agentId: testAgent.id,
+        organizationId: organization.id,
+        userId: user.id,
+        conversationId: crypto.randomUUID(),
+        tokenAuth: {
+          tokenId: crypto.randomUUID(),
+          teamId: null,
+          isOrganizationToken: true,
+          organizationId: organization.id,
+          isUserToken: false,
+        },
+      },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(mockExecuteA2AMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: targetAgent.id,
+        message: "Write the requested artifact.",
+        organizationId: organization.id,
+        userId: user.id,
+      }),
+    );
+  });
+
+  test("propagates chatops and scheduled run context to delegated subagents", async ({
+    makeAgent,
+    makeAgentTool,
+  }) => {
+    const targetAgent = await makeAgent({ name: "ChatOps Worker" });
+    const delegationTool = await ToolModel.findOrCreateDelegationTool(
+      targetAgent.id,
+    );
+    await makeAgentTool(testAgent.id, delegationTool.id);
+
+    mockExecuteA2AMessage.mockResolvedValue({
+      messageId: "subagent-message-chatops-context",
+      text: "Handled by subagent",
+      finishReason: "stop",
+    });
+
+    const result = await executeArchestraTool(
+      `${AGENT_TOOL_PREFIX}${slugify(targetAgent.name)}`,
+      { message: "Write the requested artifact." },
+      {
+        ...mockContext,
+        conversationId: "synthetic-chatops-isolation-key",
+        chatOpsBindingId: "chatops-binding-1",
+        chatOpsThreadId: "thread-1",
+        scheduleTriggerRunId: "schedule-run-1",
+      },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(mockExecuteA2AMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: targetAgent.id,
+        message: "Write the requested artifact.",
+        conversationId: "synthetic-chatops-isolation-key",
+        chatOpsBindingId: "chatops-binding-1",
+        chatOpsThreadId: "thread-1",
+        scheduleTriggerRunId: "schedule-run-1",
       }),
     );
   });

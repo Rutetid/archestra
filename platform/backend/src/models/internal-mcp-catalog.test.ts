@@ -1,4 +1,6 @@
-import { ARCHESTRA_MCP_CATALOG_ID, DEFAULT_APP_NAME } from "@shared";
+import { ARCHESTRA_MCP_CATALOG_ID, DEFAULT_APP_NAME } from "@archestra/shared";
+import { eq } from "drizzle-orm";
+import db, { schema } from "@/database";
 import { describe, expect, test } from "@/test";
 import {
   ENTERPRISE_MANAGED_CLIENT_SECRET_OVERRIDE_SECRET_KEY,
@@ -6,6 +8,7 @@ import {
 } from "@/types";
 import InternalMcpCatalogModel from "./internal-mcp-catalog";
 import McpCatalogLabelModel from "./mcp-catalog-label";
+import ToolModel from "./tool";
 
 describe("InternalMcpCatalogModel", () => {
   describe("findAll with expandSecrets", () => {
@@ -359,7 +362,9 @@ describe("InternalMcpCatalogModel", () => {
       expect(found?.labels[0].value).toBe("ai");
     });
 
-    test("findAll returns labels for all items", async () => {
+    test("findAll returns labels and tool counts for all items", async ({
+      makeTool,
+    }) => {
       const catalog = await InternalMcpCatalogModel.create({
         name: "catalog-find-all-labels",
         serverType: "remote",
@@ -368,6 +373,8 @@ describe("InternalMcpCatalogModel", () => {
           { key: "team", value: "platform" },
         ],
       });
+      await makeTool({ catalogId: catalog.id, name: "catalog-label-tool-1" });
+      await makeTool({ catalogId: catalog.id, name: "catalog-label-tool-2" });
 
       const all = await InternalMcpCatalogModel.findAll({
         expandSecrets: false,
@@ -378,6 +385,24 @@ describe("InternalMcpCatalogModel", () => {
       expect(found?.labels).toHaveLength(2);
       expect(found?.labels[0].key).toBe("region");
       expect(found?.labels[1].key).toBe("team");
+      expect(found?.toolCount).toBe(2);
+    });
+
+    test("findById omits list-only tool count metadata", async ({
+      makeTool,
+    }) => {
+      const catalog = await InternalMcpCatalogModel.create({
+        name: "catalog-find-by-id-without-tool-count",
+        serverType: "remote",
+      });
+      await makeTool({ catalogId: catalog.id, name: "catalog-detail-tool" });
+
+      const found = await InternalMcpCatalogModel.findById(catalog.id, {
+        expandSecrets: false,
+      });
+
+      expect(found).not.toBeNull();
+      expect(found).not.toHaveProperty("toolCount");
     });
 
     test("searchByQuery returns labels", async () => {
@@ -444,11 +469,11 @@ describe("InternalMcpCatalogModel", () => {
       });
 
       const updated = await InternalMcpCatalogModel.update(catalog.id, {
-        name: "catalog-update-no-labels-renamed",
+        description: "edited description",
       });
 
       expect(updated).not.toBeNull();
-      expect(updated?.name).toBe("catalog-update-no-labels-renamed");
+      expect(updated?.description).toBe("edited description");
       expect(updated?.labels).toHaveLength(1);
       expect(updated?.labels[0].key).toBe("keep");
       expect(updated?.labels[0].value).toBe("me");
@@ -675,6 +700,79 @@ describe("InternalMcpCatalogModel", () => {
       expect(archestraCatalog).toBeDefined();
       expect(archestraCatalog?.name).toBe(DEFAULT_APP_NAME);
       expect(archestraCatalog?.serverType).toBe("builtin");
+    });
+  });
+
+  describe("clonedFrom lineage", () => {
+    test("persists clonedFrom on create", async ({
+      makeOrganization,
+      makeInternalMcpCatalog,
+    }) => {
+      const org = await makeOrganization();
+      const source = await makeInternalMcpCatalog({ organizationId: org.id });
+      const clone = await makeInternalMcpCatalog({
+        organizationId: org.id,
+        clonedFrom: source.id,
+      });
+
+      const fetched = await InternalMcpCatalogModel.findById(clone.id, {
+        expandSecrets: false,
+      });
+      expect(fetched?.clonedFrom).toBe(source.id);
+    });
+
+    test("nulls clonedFrom when the source is deleted (ON DELETE SET NULL)", async ({
+      makeOrganization,
+      makeInternalMcpCatalog,
+    }) => {
+      const org = await makeOrganization();
+      const source = await makeInternalMcpCatalog({ organizationId: org.id });
+      const clone = await makeInternalMcpCatalog({
+        organizationId: org.id,
+        clonedFrom: source.id,
+      });
+
+      const deleted = await InternalMcpCatalogModel.delete(source.id);
+      expect(deleted).toBe(true);
+
+      const fetched = await InternalMcpCatalogModel.findById(clone.id, {
+        expandSecrets: false,
+      });
+      // The clone survives; only the lineage pointer is cleared.
+      expect(fetched).not.toBeNull();
+      expect(fetched?.clonedFrom).toBeNull();
+    });
+
+    test("copies source tools as provisional when created as a clone", async ({
+      makeOrganization,
+      makeInternalMcpCatalog,
+    }) => {
+      const org = await makeOrganization();
+      const source = await makeInternalMcpCatalog({ organizationId: org.id });
+      await ToolModel.create({
+        catalogId: source.id,
+        name: ToolModel.slugifyName(source.name, "search"),
+        parameters: {},
+        description: null,
+      });
+
+      const clone = await InternalMcpCatalogModel.create(
+        {
+          name: `${source.name}-copy`,
+          serverType: "remote",
+          serverUrl: "https://api.example.com/mcp/",
+          scope: "org",
+          clonedFrom: source.id,
+        },
+        { organizationId: org.id },
+      );
+
+      const clonedTools = await db
+        .select()
+        .from(schema.toolsTable)
+        .where(eq(schema.toolsTable.catalogId, clone.id));
+      expect(clonedTools).toHaveLength(1);
+      expect(clonedTools[0].clonedPendingDiscovery).toBe(true);
     });
   });
 });

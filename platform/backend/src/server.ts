@@ -17,17 +17,17 @@ if (isMainModule) {
 }
 
 import { readFileSync } from "node:fs";
+import {
+  EmbeddingDimensionsSchema,
+  LocalConfigEnvironmentDefaultSchema,
+  SUPPORTED_EMBEDDING_DIMENSIONS,
+} from "@archestra/shared";
 import fastifyCors from "@fastify/cors";
 import fastifyFormbody from "@fastify/formbody";
 import fastifySwagger from "@fastify/swagger";
 import type { McpUiResourceCsp } from "@modelcontextprotocol/ext-apps";
 import * as Sentry from "@sentry/node";
-import {
-  EmbeddingDimensionsSchema,
-  LocalConfigEnvironmentDefaultSchema,
-  SUPPORTED_EMBEDDING_DIMENSIONS,
-} from "@shared";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import metricsPlugin from "fastify-metrics";
 import {
   createJsonSchemaTransformObject,
@@ -57,10 +57,15 @@ import { seedRequiredStartingData } from "@/database/seed";
 import { McpServerRuntimeManager } from "@/k8s/mcp-server-runtime";
 import logger from "@/logging";
 import { enterpriseLicenseMiddleware } from "@/middleware";
+import { initAuditDecisions } from "@/middleware/audit-decisions";
+import { registerAuditLogHook } from "@/middleware/audit-log-hook";
+import { initAuditRegistry } from "@/middleware/audit-log-registry";
 import OrganizationModel from "@/models/organization";
 import { initializeObservabilityMetrics } from "@/observability";
 import { enrichOpenApiWithRbac } from "@/openapi/enrich-openapi-with-rbac";
+import { instanceAnalyticsService } from "@/services/instance-analytics";
 import { systemKeyManager } from "@/services/system-key-manager";
+import { skillSandboxRuntimeService } from "@/skills-sandbox/skill-sandbox-runtime-service";
 import { taskQueueService } from "@/task-queue";
 import { registerTaskHandlers } from "@/task-queue/handlers";
 import {
@@ -83,10 +88,12 @@ import {
 } from "@/types";
 import websocketService from "@/websocket";
 import * as routes from "./routes";
+import { publicConfigRoutes } from "./routes/config";
 import {
   HEALTH_PATH,
   MCP_GATEWAY_PREFIX,
   READY_PATH,
+  SKILL_MARKETPLACE_PREFIX,
 } from "./routes/route-paths";
 import {
   UserConfigFieldDefaultSchema,
@@ -298,6 +305,54 @@ export async function registerWorkerRoutes(fastify: FastifyInstanceWithZod) {
   fastify.register(routes.mcpGatewayRoutes);
 }
 
+/** Fastify code emitted when a request body exceeds the configured limit. */
+const BODY_TOO_LARGE_CODE = "FST_ERR_CTP_BODY_TOO_LARGE";
+
+/**
+ * Extract the route, URL, method, and a sample of headers we want correlated
+ * with every error log line. Without these, "HTTP 50x request error occurred"
+ * is unactionable — you can't tell which endpoint failed or how big the payload
+ * was.
+ */
+function buildRequestErrorContext(request: FastifyRequest) {
+  return {
+    method: request.method,
+    url: request.url,
+    route: request.routeOptions?.url,
+    routeId:
+      (request.routeOptions?.config as { operationId?: string } | undefined)
+        ?.operationId ?? undefined,
+    reqId: request.id,
+    contentLength: parseContentLength(request),
+    contentType: request.headers["content-type"],
+  };
+}
+
+function parseContentLength(request: FastifyRequest): number | undefined {
+  const raw = request.headers["content-length"];
+  if (typeof raw !== "string") return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function isBodyTooLargeError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; statusCode?: number };
+  return e.code === BODY_TOO_LARGE_CODE || e.statusCode === 413;
+}
+
+function formatBodyTooLargeMessage(params: {
+  limit: number;
+  contentLength?: number;
+}): string {
+  const limitMb = (params.limit / (1024 * 1024)).toFixed(0);
+  if (params.contentLength !== undefined) {
+    const gotMb = (params.contentLength / (1024 * 1024)).toFixed(1);
+    return `Request body too large: ${gotMb} MB (limit ${limitMb} MB). Use a smaller attachment, or raise ARCHESTRA_API_BODY_LIMIT.`;
+  }
+  return `Request body too large (limit ${limitMb} MB). Use a smaller attachment, or raise ARCHESTRA_API_BODY_LIMIT.`;
+}
+
 /**
  * Sets up logging and zod type provider + request validation & response serialization
  */
@@ -312,7 +367,9 @@ export const createFastifyInstance = () =>
     .setValidatorCompiler(validatorCompiler)
     .setSerializerCompiler(serializerCompiler)
     // https://fastify.dev/docs/latest/Reference/Server/#seterrorhandler
-    .setErrorHandler<ApiError | Error>(function (error, _request, reply) {
+    .setErrorHandler<ApiError | Error>(function (error, request, reply) {
+      const requestContext = buildRequestErrorContext(request);
+
       // Handle response serialization errors (when response doesn't match schema)
       if (isResponseSerializationError(error)) {
         const issues = error.cause?.issues ?? [];
@@ -324,6 +381,7 @@ export const createFastifyInstance = () =>
 
         this.log.error(
           {
+            ...requestContext,
             statusCode: 500,
             method: error.method,
             url: error.url,
@@ -356,7 +414,7 @@ export const createFastifyInstance = () =>
       if (hasZodFastifySchemaValidationErrors(error)) {
         const message = error.message || "Validation error";
         this.log.info(
-          { error: message, statusCode: 400 },
+          { ...requestContext, error: message, statusCode: 400 },
           "HTTP 400 validation error occurred",
         );
 
@@ -368,25 +426,50 @@ export const createFastifyInstance = () =>
         });
       }
 
+      // Handle Fastify "body too large" before the generic Error branch so it
+      // returns 413 (not 500) with a message that names the limit and observed
+      // size. The frontend chat-error mapper picks up `error.message`, so a
+      // useful text here flows straight into the UI.
+      if (isBodyTooLargeError(error)) {
+        const limit = config.api.bodyLimit;
+        const contentLength = parseContentLength(request);
+        const message = formatBodyTooLargeMessage({ limit, contentLength });
+
+        this.log.warn(
+          {
+            ...requestContext,
+            statusCode: 413,
+            code: (error as { code?: string }).code ?? BODY_TOO_LARGE_CODE,
+            bodyLimit: limit,
+            contentLength,
+          },
+          "HTTP 413 request body too large",
+        );
+
+        return reply.status(413).send({
+          error: {
+            message,
+            type: "api_payload_too_large_error",
+          },
+        });
+      }
+
       // Handle ApiError objects
       if (error instanceof ApiError) {
         const { statusCode, message, type, internalCode } = error;
+        const logPayload = {
+          ...requestContext,
+          error: message,
+          statusCode,
+          ...(internalCode && { internalCode }),
+        };
 
         if (statusCode >= 500) {
-          this.log.error(
-            { error: message, statusCode },
-            "HTTP 50x request error occurred",
-          );
+          this.log.error(logPayload, "HTTP 50x request error occurred");
         } else if (statusCode >= 400) {
-          this.log.info(
-            { error: message, statusCode },
-            "HTTP 40x request error occurred",
-          );
+          this.log.info(logPayload, "HTTP 40x request error occurred");
         } else {
-          this.log.error(
-            { error: message, statusCode },
-            "HTTP request error occurred",
-          );
+          this.log.error(logPayload, "HTTP request error occurred");
         }
 
         return reply.status(statusCode).send({
@@ -401,9 +484,16 @@ export const createFastifyInstance = () =>
       // Handle standard Error objects
       const message = error.message || "Internal server error";
       const statusCode = 500;
+      const errorCode = (error as { code?: string }).code;
 
       this.log.error(
-        { error: message, statusCode },
+        {
+          ...requestContext,
+          error: message,
+          statusCode,
+          ...(errorCode && { code: errorCode }),
+          stack: error.stack,
+        },
         "HTTP 50x request error occurred",
       );
 
@@ -693,12 +783,15 @@ const startWebServer = async () => {
    * - /health: Kubernetes liveness probe
    * - /ready: Kubernetes readiness probe (checks database connectivity)
    * - GET /v1/mcp/*: MCP Gateway SSE polling (happens every second)
+   * - /skills/m/*: public marketplace git endpoint — URL contains raw share token
    */
   const shouldSkipRequestLogging = (url: string, method: string): boolean => {
     if (url === HEALTH_PATH || url === READY_PATH) return true;
     // Skip MCP Gateway SSE polling (GET requests to /v1/mcp/*)
     if (method === "GET" && url.startsWith(`${MCP_GATEWAY_PREFIX}/`))
       return true;
+    // token is embedded in the URL path; never log it
+    if (url.startsWith(`${SKILL_MARKETPLACE_PREFIX}/`)) return true;
     return false;
   };
 
@@ -735,6 +828,14 @@ const startWebServer = async () => {
     Sentry.setupFastifyErrorHandler(fastify);
   }
 
+  if (config.maintenanceMode) {
+    await registerMaintenanceModeRoutes(fastify);
+    await fastify.listen({ port, host });
+    fastify.log.info(`${name} started in maintenance mode on port ${port}`);
+    registerWebServerShutdown(fastify);
+    return;
+  }
+
   /**
    * The auth plugin is responsible for authentication and authorization checks
    *
@@ -749,6 +850,13 @@ const startWebServer = async () => {
    * This should be registered before routes to ensure enterprise-only features are checked properly.
    */
   fastify.register(enterpriseLicenseMiddleware);
+
+  // Extend the audit registry and audit decisions with EE entries
+  // (identity providers) if applicable, then register the audit hooks.
+  // Done before routes so the hooks are active for all subsequent requests.
+  await initAuditRegistry();
+  await initAuditDecisions();
+  registerAuditLogHook(fastify);
 
   try {
     // Initialize database connection first
@@ -791,7 +899,19 @@ const startWebServer = async () => {
       `Observability initialized with ${labelKeys.length} agent label keys`,
     );
 
+    instanceAnalyticsService.trackStartup().catch((error) => {
+      logger.warn({ err: error }, "Failed to track instance analytics");
+    });
+
     startMcpServerRuntime(fastify);
+
+    // Start the sandboxed code runtime in the background (non-blocking pre-warm).
+    skillSandboxRuntimeService.init().catch((error) => {
+      logger.error(
+        { err: error },
+        "Failed to initialize skill sandbox runtime",
+      );
+    });
 
     // Initialize incoming email provider (if configured)
     // This handles auto-setup of webhook subscription if ARCHESTRA_AGENTS_INCOMING_EMAIL_OUTLOOK_WEBHOOK_URL is set
@@ -894,90 +1014,112 @@ const startWebServer = async () => {
     websocketService.start(fastify.server);
     fastify.log.info("WebSocket service started");
 
-    // Graceful shutdown handling
-    const gracefulShutdown = async (signal: string) => {
-      fastify.log.info(`Received ${signal}, shutting down gracefully...`);
-
-      try {
-        // PRIORITY: Close servers FIRST to release ports immediately
-        // This prevents EADDRINUSE errors during hot-reload when the new server starts
-        // before cleanup operations complete
-
-        // Close metrics server (releases port 9050)
-        if (metricsServerInstance) {
-          await metricsServerInstance.close();
-          fastify.log.info("Metrics server closed");
-        }
-
-        // Close main server (releases port 9000)
-        await fastify.close();
-        fastify.log.info("Main server closed");
-
-        // Close WebSocket server
-        websocketService.stop();
-
-        // Clear email subscription renewal interval
-        clearInterval(emailRenewalIntervalId);
-        clearInterval(processedEmailCleanupIntervalId);
-        fastify.log.info("Email background job intervals cleared");
-
-        // Stop cache manager's background cleanup
-        cacheManager.shutdown();
-
-        // Stop task queue worker (waits for in-flight tasks to drain)
-        if (shouldRunWorker) {
-          await taskQueueService.stopWorker();
-        }
-
-        // Track which cleanup operations have completed
-        const completedCleanups = new Set<"emailProvider" | "chatOps">();
-
-        // Run remaining cleanup in parallel with a timeout to avoid blocking shutdown
-        const cleanupPromise = Promise.allSettled([
-          cleanupEmailProvider().then(() => {
-            completedCleanups.add("emailProvider");
-            fastify.log.info("Email provider cleanup completed");
-          }),
-          chatOpsManager.cleanup().then(() => {
-            completedCleanups.add("chatOps");
-            fastify.log.info("ChatOps provider cleanup completed");
-          }),
-        ]).then(() => "completed" as const);
-
-        // Wait for cleanup with timeout, then exit anyway
-        const allCleanupNames = ["emailProvider", "chatOps"] as const;
-        const result = await Promise.race([
-          cleanupPromise,
-          new Promise<"timeout">((resolve) =>
-            setTimeout(() => resolve("timeout"), SHUTDOWN_CLEANUP_TIMEOUT_MS),
-          ),
-        ]);
-
-        if (result === "timeout") {
-          const pendingCleanups = allCleanupNames.filter(
-            (name) => !completedCleanups.has(name),
-          );
-          fastify.log.warn(
-            { pendingCleanups },
-            "Cleanup timed out, proceeding with shutdown",
-          );
-        }
-
-        process.exit(0);
-      } catch (error) {
-        fastify.log.error({ error }, "Error during shutdown");
-        process.exit(1);
-      }
-    };
-
-    // Handle shutdown signals
-    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    registerWebServerShutdown(fastify, {
+      emailRenewalIntervalId,
+      processedEmailCleanupIntervalId,
+    });
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
   }
 };
+
+async function registerMaintenanceModeRoutes(
+  fastify: FastifyInstanceWithZod,
+): Promise<void> {
+  await fastify.register(fastifyCors, {
+    origin: corsOrigins,
+    methods: ["GET", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "X-Requested-With",
+      "Cookie",
+      apiKeyAuthorizationHeaderName,
+    ],
+    exposedHeaders: ["Set-Cookie"],
+    credentials: true,
+  });
+  await fastify.register(routes.healthRoutes);
+  await fastify.register(publicConfigRoutes);
+}
+
+function registerWebServerShutdown(
+  fastify: FastifyInstanceWithZod,
+  intervalIds: {
+    emailRenewalIntervalId?: NodeJS.Timeout;
+    processedEmailCleanupIntervalId?: NodeJS.Timeout;
+  } = {},
+): void {
+  const gracefulShutdown = async (signal: string) => {
+    fastify.log.info(`Received ${signal}, shutting down gracefully...`);
+
+    try {
+      if (metricsServerInstance) {
+        await metricsServerInstance.close();
+        fastify.log.info("Metrics server closed");
+      }
+
+      await fastify.close();
+      fastify.log.info("Main server closed");
+
+      websocketService.stop();
+
+      if (intervalIds.emailRenewalIntervalId) {
+        clearInterval(intervalIds.emailRenewalIntervalId);
+      }
+      if (intervalIds.processedEmailCleanupIntervalId) {
+        clearInterval(intervalIds.processedEmailCleanupIntervalId);
+      }
+
+      cacheManager.shutdown();
+
+      // Stop accepting new skill-sandbox runs
+      await skillSandboxRuntimeService.shutdown();
+
+      if (shouldRunWorker) {
+        await taskQueueService.stopWorker();
+      }
+
+      const completedCleanups = new Set<"emailProvider" | "chatOps">();
+      const cleanupPromise = Promise.allSettled([
+        cleanupEmailProvider().then(() => {
+          completedCleanups.add("emailProvider");
+          fastify.log.info("Email provider cleanup completed");
+        }),
+        chatOpsManager.cleanup().then(() => {
+          completedCleanups.add("chatOps");
+          fastify.log.info("ChatOps provider cleanup completed");
+        }),
+      ]).then(() => "completed" as const);
+
+      const allCleanupNames = ["emailProvider", "chatOps"] as const;
+      const result = await Promise.race([
+        cleanupPromise,
+        new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), SHUTDOWN_CLEANUP_TIMEOUT_MS),
+        ),
+      ]);
+
+      if (result === "timeout") {
+        const pendingCleanups = allCleanupNames.filter(
+          (cleanupName) => !completedCleanups.has(cleanupName),
+        );
+        fastify.log.warn(
+          { pendingCleanups },
+          "Cleanup timed out, proceeding with shutdown",
+        );
+      }
+
+      process.exit(0);
+    } catch (error) {
+      fastify.log.error({ error }, "Error during shutdown");
+      process.exit(1);
+    }
+  };
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+}
 
 /**
  * Starts the process in worker-only mode.
@@ -1014,6 +1156,14 @@ const startWorker = async () => {
     registerTaskHandlers(taskQueueService);
     await taskQueueService.seedPeriodicTasks();
     taskQueueService.startWorker();
+
+    // Pre-warm the code runtime so scheduled agents avoid a cold first run.
+    skillSandboxRuntimeService.init().catch((error) => {
+      logger.error(
+        { err: error },
+        "Failed to initialize skill sandbox runtime",
+      );
+    });
 
     // Worker server for Kubernetes probes, Prometheus scraping,
     // and LLM Proxy / MCP Gateway routes for A2A and scheduled task execution.
@@ -1065,6 +1215,7 @@ const startWorker = async () => {
       try {
         await healthServer.close();
         cacheManager.shutdown();
+        await skillSandboxRuntimeService.shutdown();
         await taskQueueService.stopWorker();
         clearTimeout(forceExitTimeout);
         process.exit(0);
@@ -1082,6 +1233,13 @@ const startWorker = async () => {
     process.exit(1);
   }
 };
+
+// Dagger SDK v0.20.8 has a bug in bin.js:198-201 where it throws inside a
+// .catch() callback, creating an unhandled rejection that is never awaited.
+// This handler logs those leaks and keeps the server alive.
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "Unhandled promise rejection");
+});
 
 /**
  * Only start the server if this file is being run directly (not imported)

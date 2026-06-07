@@ -7,6 +7,7 @@ import {
   JiraConfigSchema,
   SalesforceCheckpointSchema,
   SalesforceConfigSchema,
+  WebCrawlerConfigSchema,
 } from "./knowledge-connector";
 
 describe("knowledge-connector schemas", () => {
@@ -229,6 +230,94 @@ describe("knowledge-connector schemas", () => {
       if (result.type === "confluence") {
         expect(result.confluenceUrl).toBe("https://mycompany.atlassian.net");
       }
+    });
+  });
+
+  describe("WebCrawlerConfigSchema URL validation", () => {
+    test("normalizes web crawler start URLs without a protocol", () => {
+      const result = WebCrawlerConfigSchema.parse({
+        type: "web_crawler",
+        startUrl: "docs.example.com:8443/guide",
+      });
+
+      expect(result.startUrl).toBe("https://docs.example.com:8443/guide");
+    });
+
+    test("rejects explicit non-HTTP schemes before protocol normalization", () => {
+      for (const startUrl of [
+        "data:text/html,<main>Docs</main>",
+        "javascript:alert(1)",
+        "vbscript:msgbox('x')",
+        "ftp://docs.example.com/guide",
+      ]) {
+        const result = WebCrawlerConfigSchema.safeParse({
+          type: "web_crawler",
+          startUrl,
+        });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues[0]?.message).toBe(
+            "startUrl must use HTTP or HTTPS",
+          );
+        }
+      }
+    });
+  });
+
+  describe("GitHub connector schema", () => {
+    test("accepts GitHub App authentication config", () => {
+      const result = GithubConfigSchema.parse({
+        type: "github",
+        githubUrl: "api.github.com",
+        owner: "test-org",
+        authMethod: "github_app",
+        githubAppConfigId: "123e4567-e89b-12d3-a456-426614174000",
+      });
+
+      expect(result.authMethod).toBe("github_app");
+      expect(result.githubAppConfigId).toBe(
+        "123e4567-e89b-12d3-a456-426614174000",
+      );
+      expect(result.githubUrl).toBe("https://api.github.com");
+    });
+
+    test("rejects a non-UUID githubAppConfigId", () => {
+      expect(() =>
+        GithubConfigSchema.parse({
+          type: "github",
+          githubUrl: "api.github.com",
+          owner: "test-org",
+          authMethod: "github_app",
+          githubAppConfigId: "not-a-uuid",
+        }),
+      ).toThrow();
+    });
+
+    test("accepts repository file type filters", () => {
+      const result = GithubConfigSchema.parse({
+        type: "github",
+        githubUrl: "api.github.com",
+        owner: "test-org",
+        includeRepositoryFiles: true,
+        fileTypes: [".md", ".yaml"],
+      });
+
+      expect(result.fileTypes).toEqual([".md", ".yaml"]);
+    });
+  });
+
+  describe("Jira connector schema", () => {
+    test("accepts comma-separated project keys", () => {
+      const result = JiraConfigSchema.parse({
+        type: "jira",
+        jiraBaseUrl: "mycompany.atlassian.net",
+        isCloud: true,
+        projectKey: "ENG, OPS",
+      });
+
+      expect(result.projectKey).toBe("ENG, OPS");
+      expect(result.jiraBaseUrl).toBe("https://mycompany.atlassian.net");
     });
   });
 

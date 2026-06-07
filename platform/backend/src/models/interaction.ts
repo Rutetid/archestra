@@ -1,4 +1,4 @@
-import type { InteractionSource, PaginationQuery } from "@shared";
+import type { InteractionSource, PaginationQuery } from "@archestra/shared";
 import {
   and,
   asc,
@@ -17,6 +17,7 @@ import {
   sum,
 } from "drizzle-orm";
 import db, { schema } from "@/database";
+import { notDeleted } from "@/database/schemas/soft-deletable-table";
 import {
   createPaginatedResult,
   type PaginatedResult,
@@ -31,15 +32,18 @@ import type {
   UserInfo,
 } from "@/types";
 import { InteractionAuthMethodSchema } from "@/types";
+import { escapeLikePattern } from "@/utils/sql-search";
+import AgentModel from "./agent";
 import AgentTeamModel from "./agent-team";
+import ConversationChatErrorModel from "./conversation-chat-error";
 import LimitModel from "./limit";
 
-/**
- * Escapes special LIKE pattern characters (%, _, \) to treat them as literals.
- * This prevents users from crafting searches that behave unexpectedly.
- */
-function escapeLikePattern(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
+async function findChatErrorsForSessionId(sessionId: string | null) {
+  if (!sessionId || !isUuid(sessionId)) {
+    return [];
+  }
+
+  return ConversationChatErrorModel.findByConversation(sessionId);
 }
 
 /**
@@ -366,10 +370,20 @@ class InteractionModel {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const [data, [{ total }]] = await Promise.all([
+    const [rows, [{ total }]] = await Promise.all([
       db
-        .select()
+        .select({
+          interaction: schema.interactionsTable,
+          activeProfileId: schema.agentsTable.id,
+        })
         .from(schema.interactionsTable)
+        .leftJoin(
+          schema.agentsTable,
+          and(
+            eq(schema.interactionsTable.profileId, schema.agentsTable.id),
+            notDeleted(schema.agentsTable),
+          ),
+        )
         .where(whereClause)
         .orderBy(orderByClause)
         .limit(pagination.limit)
@@ -379,6 +393,10 @@ class InteractionModel {
         .from(schema.interactionsTable)
         .where(whereClause),
     ]);
+    const data = rows.map(({ interaction, activeProfileId }) => ({
+      ...interaction,
+      profileId: activeProfileId,
+    }));
 
     // Resolve external agent IDs (including delegation chains) to agent names
     const allAgentIds = extractAllAgentIdsFromExternalAgentIds(
@@ -442,14 +460,28 @@ class InteractionModel {
     userId?: string,
     isAgentAdmin?: boolean,
   ): Promise<Interaction | null> {
-    const [interaction] = await db
-      .select()
+    const [row] = await db
+      .select({
+        interaction: schema.interactionsTable,
+        activeProfileId: schema.agentsTable.id,
+      })
       .from(schema.interactionsTable)
+      .leftJoin(
+        schema.agentsTable,
+        and(
+          eq(schema.interactionsTable.profileId, schema.agentsTable.id),
+          notDeleted(schema.agentsTable),
+        ),
+      )
       .where(eq(schema.interactionsTable.id, id));
 
-    if (!interaction) {
+    if (!row) {
       return null;
     }
+    const interaction = {
+      ...row.interaction,
+      profileId: row.activeProfileId,
+    };
 
     // Check access control for non-agent admins
     if (userId && !isAgentAdmin) {
@@ -467,7 +499,10 @@ class InteractionModel {
       }
     }
 
-    return interaction as Interaction;
+    return {
+      ...interaction,
+      chatErrors: await findChatErrorsForSessionId(interaction.sessionId),
+    } as Interaction;
   }
 
   static async getAllInteractionsForProfile(
@@ -677,20 +712,17 @@ class InteractionModel {
           `Profile ${interaction.profileId} has no team assignments for interaction ${interaction.id}`,
         );
 
-        // Even if agent has no teams, we should still try to update organization limits
-        // We'll use a default organization approach - get the first organization from existing limits
+        // Even if agent has no teams, update organization limits for its own org.
         try {
-          const existingOrgLimits = await db
-            .select({ entityId: schema.limitsTable.entityId })
-            .from(schema.limitsTable)
-            .where(eq(schema.limitsTable.entityType, "organization"))
-            .limit(1);
+          const organizationId = await AgentModel.findOrganizationId(
+            interaction.profileId,
+          );
 
-          if (existingOrgLimits.length > 0) {
+          if (organizationId) {
             updatePromises.push(
               LimitModel.updateTokenLimitUsage(
                 "organization",
-                existingOrgLimits[0].entityId,
+                organizationId,
                 model,
                 inputTokens,
                 outputTokens,
@@ -747,6 +779,30 @@ class InteractionModel {
           outputTokens,
         ),
       );
+
+      if (interaction.userId) {
+        updatePromises.push(
+          LimitModel.updateTokenLimitUsage(
+            "user",
+            interaction.userId,
+            model,
+            inputTokens,
+            outputTokens,
+          ),
+        );
+      }
+
+      if (interaction.virtualKeyId) {
+        updatePromises.push(
+          LimitModel.updateTokenLimitUsage(
+            "virtual_key",
+            interaction.virtualKeyId,
+            model,
+            inputTokens,
+            outputTokens,
+          ),
+        );
+      }
 
       // Execute all updates in parallel
       await Promise.all(updatePromises);
@@ -871,8 +927,10 @@ class InteractionModel {
         .select({
           sessionId: max(schema.interactionsTable.sessionId),
           sessionSource: max(schema.interactionsTable.sessionSource),
-          // MAX() picks alphabetically last source for mixed-source sessions; in practice sessions are single-source
-          source: max(schema.interactionsTable.source),
+          source: sql<InteractionSource | null>`CASE WHEN COUNT(DISTINCT ${schema.interactionsTable.source}) = 1 THEN MAX(${schema.interactionsTable.source}) ELSE NULL END`,
+          sources: sql<
+            InteractionSource[]
+          >`ARRAY_REMOVE(ARRAY_AGG(DISTINCT ${schema.interactionsTable.source} ORDER BY ${schema.interactionsTable.source}), NULL)`,
           // For single interactions (no session), return the interaction ID for direct navigation
           interactionId: sql<string>`CASE WHEN MAX(${schema.interactionsTable.sessionId}) IS NULL THEN MAX(${schema.interactionsTable.id}::text) ELSE NULL END`,
           requestCount: count(),
@@ -890,8 +948,8 @@ class InteractionModel {
           firstRequestTime: min(schema.interactionsTable.createdAt),
           lastRequestTime: max(schema.interactionsTable.createdAt),
           models: sql<string>`STRING_AGG(DISTINCT ${schema.interactionsTable.model}, ',')`,
-          profileId: schema.interactionsTable.profileId,
-          profileName: schema.agentsTable.name,
+          profileId: sql<string | null>`MAX(${schema.agentsTable.id}::text)`,
+          profileName: max(schema.agentsTable.name),
           externalAgentIds: sql<string>`STRING_AGG(DISTINCT ${schema.interactionsTable.externalAgentId}, ',')`,
           authMethods: sql<string>`STRING_AGG(DISTINCT ${schema.interactionsTable.authMethod}, ',')`,
           authenticatedAppNames: sql<
@@ -904,7 +962,10 @@ class InteractionModel {
         .from(schema.interactionsTable)
         .leftJoin(
           schema.agentsTable,
-          eq(schema.interactionsTable.profileId, schema.agentsTable.id),
+          and(
+            eq(schema.interactionsTable.profileId, schema.agentsTable.id),
+            notDeleted(schema.agentsTable),
+          ),
         )
         .leftJoin(
           schema.usersTable,
@@ -971,6 +1032,7 @@ class InteractionModel {
         sessionId: s.sessionId,
         sessionSource: s.sessionSource,
         source: s.source,
+        sources: s.sources ?? [],
         interactionId: s.interactionId, // Only set for single interactions (null session)
         requestCount: Number(s.requestCount),
         totalInputTokens: Number(s.totalInputTokens) || 0,

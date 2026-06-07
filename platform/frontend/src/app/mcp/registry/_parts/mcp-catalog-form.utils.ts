@@ -5,7 +5,7 @@ import {
   type ImagePullSecretConfig,
   isVaultReference,
   parseVaultReference,
-} from "@shared";
+} from "@archestra/shared";
 import { parseDockerArgsToLocalConfig } from "./docker-args-parser";
 import type { McpCatalogFormValues } from "./mcp-catalog-form.types";
 
@@ -120,6 +120,9 @@ export function transformFormToApiData(
           ? undefined
           : values.oauthConfig.client_secret || undefined,
       audience: values.oauthConfig.audience || undefined,
+      resource: isClientCredentials
+        ? undefined
+        : values.oauthConfig.resource || undefined,
       redirect_uris: redirectUrisList,
       scopes: scopesList,
       // default_scopes is the fallback used by the backend's scope resolution:
@@ -238,7 +241,21 @@ export function transformFormToApiData(
     data.teams = values.teams;
   }
 
+  // Deployment environment assignment (null = the default environment)
+  data.environmentId = values.environmentId ?? null;
+
   return data;
+}
+
+// Build create-form values from an existing catalog item for cloning. A clone
+// is a full copy of the source's configuration (secrets included); only the
+// name is suffixed with "-copy" so the create form is valid out of the box and
+// catalog name-uniqueness validation handles collisions on submit.
+export function buildCloneFormValues(
+  item: archestraApiTypes.GetInternalMcpCatalogResponses["200"][number],
+): McpCatalogFormValues {
+  const values = transformCatalogItemToFormValues(item);
+  return { ...values, name: `${values.name}-copy` };
 }
 
 // Transform catalog item to form values
@@ -300,6 +317,7 @@ export function transformCatalogItemToFormValues(
         client_id: string;
         client_secret: string;
         audience: string;
+        resource: string;
         redirect_uris: string;
         scopes: string;
         supports_resource_metadata: boolean;
@@ -323,6 +341,7 @@ export function transformCatalogItemToFormValues(
         typeof item.userConfig?.audience?.default === "string"
           ? item.userConfig.audience.default
           : item.oauthConfig.audience || "",
+      resource: item.oauthConfig.resource || "",
       redirect_uris: item.oauthConfig.redirect_uris?.join(", ") || "",
       scopes: item.oauthConfig.scopes?.join(", ") || "",
       supports_resource_metadata:
@@ -444,6 +463,7 @@ export function transformCatalogItemToFormValues(
       value: typeof config.default === "string" ? config.default : undefined,
       description: config.description ?? "",
       includeBearerPrefix: config.valuePrefix === "Bearer ",
+      sensitive: config.sensitive ?? false,
     }));
 
   return {
@@ -477,6 +497,8 @@ export function transformCatalogItemToFormValues(
     scope: (item.scope as AgentScope) ?? "org",
     // Teams
     teams: item.teams?.map((t) => t.id) ?? [],
+    // Deployment environment (null = the default environment)
+    environmentId: item.environmentId ?? null,
   } as McpCatalogFormValues;
 }
 
@@ -555,6 +577,8 @@ export function transformExternalCatalogToFormValues(
       client_id: server.oauth_config.client_id || "",
       client_secret: server.oauth_config.client_secret || "",
       audience: "",
+      resource:
+        getOptionalStringProperty(server.oauth_config, "resource") || "",
       redirect_uris:
         redirectUris ||
         (typeof window !== "undefined"
@@ -725,11 +749,13 @@ export function transformExternalCatalogToFormValues(
         value: typeof config.default === "string" ? config.default : undefined,
         description: config.description ?? "",
         includeBearerPrefix: config.valuePrefix === "Bearer ",
+        sensitive: config.sensitive ?? false,
       })),
     oauthConfig: oauthConfig ?? {
       client_id: "",
       client_secret: "",
       audience: "",
+      resource: "",
       redirect_uris:
         typeof window !== "undefined"
           ? `${window.location.origin}/oauth-callback`
@@ -790,6 +816,11 @@ function buildStaticHeaderUserConfig(
     });
 
     usedFieldNames.add(fieldName);
+    // Static header fields cannot be sensitive (server validator rejects
+    // the combination, because `default` lives in plaintext jsonb on the
+    // catalog row). Fall back to non-sensitive for static regardless of
+    // what the form carries.
+    const isStaticHeader = !header.promptOnInstallation;
     userConfig[fieldName] = {
       type: "string",
       title: header.headerName,
@@ -802,7 +833,7 @@ function buildStaticHeaderUserConfig(
         (header.includeBearerPrefix
           ? `Sent as ${header.headerName} with a "Bearer " prefix`
           : `Sent as ${header.headerName}`),
-      sensitive: false,
+      sensitive: isStaticHeader ? false : (header.sensitive ?? false),
       headerName: header.headerName,
       valuePrefix: header.includeBearerPrefix ? "Bearer " : undefined,
     };
@@ -852,6 +883,7 @@ function getHeaderMappedUserConfigEntries(
     default?: string | number | boolean | Array<string>;
     description?: string;
     valuePrefix?: string;
+    sensitive?: boolean;
   }
 > {
   return Object.fromEntries(
@@ -870,6 +902,7 @@ function getHeaderMappedUserConfigEntries(
           default?: string | number | boolean | Array<string>;
           description?: string;
           valuePrefix?: string;
+          sensitive?: boolean;
         };
         return [
           fieldName,
@@ -881,6 +914,7 @@ function getHeaderMappedUserConfigEntries(
             default: userConfigField.default,
             description: userConfigField.description,
             valuePrefix: userConfigField.valuePrefix,
+            sensitive: userConfigField.sensitive,
           },
         ];
       }),
