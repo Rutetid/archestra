@@ -10903,6 +10903,7 @@ export type GetAgentsResponses = {
             llmModel: string | null;
             modelId: string | null;
             identityProviderId: string | null;
+            environmentId: string | null;
             passthroughHeaders: Array<string> | null;
             toolExposureMode: 'full' | 'search_and_run_only';
             builtInAgentConfig: {
@@ -11011,6 +11012,7 @@ export type CreateAgentData = {
         llmModel?: string | null;
         modelId?: string | null;
         identityProviderId?: string | null;
+        environmentId?: string | null;
         passthroughHeaders?: Array<string> | null;
         toolExposureMode?: 'full' | 'search_and_run_only';
         builtInAgentConfig?: {
@@ -11139,6 +11141,7 @@ export type CreateAgentResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -11342,6 +11345,7 @@ export type GetAllAgentsResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -11520,6 +11524,7 @@ export type GetDefaultMcpGatewayResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -11698,6 +11703,7 @@ export type GetDefaultLlmProxyResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -11954,6 +11960,7 @@ export type ImportAgentResponses = {
             llmModel: string | null;
             modelId: string | null;
             identityProviderId: string | null;
+            environmentId: string | null;
             passthroughHeaders: Array<string> | null;
             toolExposureMode: 'full' | 'search_and_run_only';
             builtInAgentConfig: {
@@ -12225,6 +12232,7 @@ export type GetAgentResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -12324,6 +12332,7 @@ export type UpdateAgentData = {
         llmModel?: string | null;
         modelId?: string | null;
         identityProviderId?: string | null;
+        environmentId?: string | null;
         passthroughHeaders?: Array<string> | null;
         toolExposureMode?: 'full' | 'search_and_run_only';
         builtInAgentConfig?: {
@@ -12454,6 +12463,7 @@ export type UpdateAgentResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -12634,6 +12644,7 @@ export type CloneAgentResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -12974,6 +12985,7 @@ export type RestoreAgentResponses = {
         llmModel: string | null;
         modelId: string | null;
         identityProviderId: string | null;
+        environmentId: string | null;
         passthroughHeaders: Array<string> | null;
         toolExposureMode: 'full' | 'search_and_run_only';
         builtInAgentConfig: {
@@ -25468,6 +25480,7 @@ export type GetConfigResponses = {
             orchestratorK8sRuntime: boolean;
             sandbox: boolean;
             agentSkillsEnabled: boolean;
+            agentEnvironmentsEnabled: boolean;
             appsEnabled: boolean;
             byosEnabled: boolean;
             byosVaultKvVersion: '1' | '2';
