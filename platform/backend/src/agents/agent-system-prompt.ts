@@ -1,6 +1,7 @@
 import {
   buildUserSystemPromptContext,
   TOOL_LOAD_SKILL_SHORT_NAME,
+  TOOL_RUN_COMMAND_SHORT_NAME,
   TOOL_RUN_TOOL_SHORT_NAME,
   TOOL_SEARCH_TOOLS_SHORT_NAME,
 } from "@archestra/shared";
@@ -8,6 +9,7 @@ import type { Tool } from "ai";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
 import { TeamModel, UserModel } from "@/models";
 import { buildSkillCatalogPrompt } from "@/skills/skill-catalog-prompt";
+import { isSkillSandboxAvailableForAgent } from "@/skills/skill-sandbox-availability";
 import {
   promptNeedsRendering,
   renderSystemPrompt,
@@ -74,16 +76,23 @@ export async function buildAgentSystemPrompt(params: {
 
   // eagerly list the agent's skills in the prompt (like Claude Code /
   // opencode), but only when the agent can actually load them.
-  const skillCatalogPrompt =
+  const [skillCatalogPrompt, sandboxAvailable] = await Promise.all([
     archestraMcpBranding.getToolName(TOOL_LOAD_SKILL_SHORT_NAME) in mcpTools
-      ? await buildSkillCatalogPrompt({ organizationId, userId, agentId })
-      : null;
+      ? buildSkillCatalogPrompt({ organizationId, userId, agentId })
+      : null,
+    isSkillSandboxAvailableForAgent({ userId, organizationId, agentId }),
+  ]);
+
+  const sandboxFallbackInstruction = sandboxAvailable
+    ? buildSandboxFallbackInstruction()
+    : null;
 
   return (
     [
       toolLoadingInstructions,
       renderedPrompt,
       skillCatalogPrompt,
+      sandboxFallbackInstruction,
       TOOL_DENIAL_INSTRUCTION,
       toolResultInstructions,
       hookSessionContext,
@@ -118,6 +127,13 @@ async function renderAgentPrompt(params: {
   }
 
   return renderSystemPrompt(systemPrompt, promptContext);
+}
+
+function buildSandboxFallbackInstruction(): string {
+  const runCommand = archestraMcpBranding.getToolName(
+    TOOL_RUN_COMMAND_SHORT_NAME,
+  );
+  return `You have a code execution environment: \`${runCommand}\` runs shell commands and Python in a persistent Linux workspace. When the available tools do not cover a task, you can fall back to it — for example to compute, transform files, or fetch data over the network.`;
 }
 
 function buildLoadToolsWhenNeededSystemPrompt(): string {
