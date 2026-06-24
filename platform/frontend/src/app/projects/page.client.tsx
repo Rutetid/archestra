@@ -22,7 +22,6 @@ import { useForm } from "react-hook-form";
 import { ErrorBoundary } from "@/app/_parts/error-boundary";
 import { AgentIcon } from "@/components/agent-icon";
 import { AgentIconPicker } from "@/components/agent-icon-picker";
-import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { NoApiKeySetup } from "@/components/no-api-key-setup";
 import { PageLayout } from "@/components/page-layout";
 import { ProjectScopeFilter } from "@/components/project-scope-filter";
@@ -53,6 +52,7 @@ import {
   useProjects,
   useUpdateProject,
 } from "@/lib/projects/projects.query";
+import { ProjectDeleteConfirmDialog } from "./project-delete-confirm-dialog";
 
 export default function ProjectsPageClient() {
   return (
@@ -142,13 +142,12 @@ function ProjectsList() {
         />
       )}
       {deletingProject && (
-        <DeleteConfirmDialog
+        <ProjectDeleteConfirmDialog
+          project={deletingProject}
           open={!!deletingProject}
           onOpenChange={(open) => {
             if (!open) setDeletingProject(null);
           }}
-          title={`Delete ${deletingProject.name}?`}
-          description="Chats are kept as ordinary conversations. Project files are deleted with the project."
           isPending={deleteProject.isPending}
           onConfirm={async () => {
             const ok = await deleteProject.mutateAsync({
@@ -156,8 +155,6 @@ function ProjectsList() {
             });
             if (ok) setDeletingProject(null);
           }}
-          confirmLabel="Delete"
-          pendingLabel="Deleting..."
         />
       )}
       <div className="space-y-6">
