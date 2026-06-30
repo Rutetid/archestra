@@ -65,6 +65,7 @@ export function makeOrganization(
     defaultNetworkPolicy: null,
     defaultEnvironmentRestricted: false,
     defaultEnvironmentValidationRegex: null,
+    defaultEnvironmentTrustedImageRegistries: null,
     ...overrides,
   };
 }

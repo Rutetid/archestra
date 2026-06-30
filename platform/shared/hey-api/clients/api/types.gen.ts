@@ -26785,6 +26785,7 @@ export type ListEnvironmentsResponses = {
                 allowedCidrs: Array<string>;
             } | null;
             validationRegex: string | null;
+            trustedImageRegistries: Array<string> | null;
             restricted: boolean;
             sortOrder: number;
             createdAt: string;
@@ -26810,6 +26811,7 @@ export type CreateEnvironmentData = {
         } | null;
         restricted?: boolean;
         validationRegex?: string | null;
+        trustedImageRegistries?: Array<string> | null;
     };
     path?: never;
     query?: never;
@@ -26898,6 +26900,7 @@ export type CreateEnvironmentResponses = {
             allowedCidrs: Array<string>;
         } | null;
         validationRegex: string | null;
+        trustedImageRegistries: Array<string> | null;
         restricted: boolean;
         sortOrder: number;
         createdAt: string;
@@ -27005,6 +27008,7 @@ export type UpdateEnvironmentData = {
         } | null;
         restricted?: boolean;
         validationRegex?: string | null;
+        trustedImageRegistries?: Array<string> | null;
     };
     path: {
         id: string;
@@ -27095,6 +27099,7 @@ export type UpdateEnvironmentResponses = {
             allowedCidrs: Array<string>;
         } | null;
         validationRegex: string | null;
+        trustedImageRegistries: Array<string> | null;
         restricted: boolean;
         sortOrder: number;
         createdAt: string;
@@ -37405,6 +37410,10 @@ export type GetInternalMcpCatalogResponses = {
         clonedFrom: string | null;
         environmentId: string | null;
         catalogReinstallRequired: boolean;
+        catalogItemApprovalStatus: string | null;
+        catalogItemApprovalReason: string | null;
+        catalogItemApprovalReviewedBy: string | null;
+        catalogItemApprovalReviewedAt: string | null;
         createdAt: string;
         updatedAt: string;
         labels: Array<{
@@ -37419,6 +37428,7 @@ export type GetInternalMcpCatalogResponses = {
         toolCount: number;
         providesUi?: boolean;
         appId?: string | null;
+        imageApprovalRequired?: boolean;
     }>;
 };
 
@@ -37737,6 +37747,10 @@ export type CreateInternalMcpCatalogItemResponses = {
         clonedFrom: string | null;
         environmentId: string | null;
         catalogReinstallRequired: boolean;
+        catalogItemApprovalStatus: string | null;
+        catalogItemApprovalReason: string | null;
+        catalogItemApprovalReviewedBy: string | null;
+        catalogItemApprovalReviewedAt: string | null;
         createdAt: string;
         updatedAt: string;
         labels: Array<{
@@ -38031,6 +38045,10 @@ export type GetInternalMcpCatalogItemResponses = {
         clonedFrom: string | null;
         environmentId: string | null;
         catalogReinstallRequired: boolean;
+        catalogItemApprovalStatus: string | null;
+        catalogItemApprovalReason: string | null;
+        catalogItemApprovalReviewedBy: string | null;
+        catalogItemApprovalReviewedAt: string | null;
         createdAt: string;
         updatedAt: string;
         labels: Array<{
@@ -38359,6 +38377,10 @@ export type UpdateInternalMcpCatalogItemResponses = {
         clonedFrom: string | null;
         environmentId: string | null;
         catalogReinstallRequired: boolean;
+        catalogItemApprovalStatus: string | null;
+        catalogItemApprovalReason: string | null;
+        catalogItemApprovalReviewedBy: string | null;
+        catalogItemApprovalReviewedAt: string | null;
         createdAt: string;
         updatedAt: string;
         labels: Array<{
@@ -38640,6 +38662,430 @@ export type RefreshInternalMcpCatalogImageResponses = {
 };
 
 export type RefreshInternalMcpCatalogImageResponse = RefreshInternalMcpCatalogImageResponses[keyof RefreshInternalMcpCatalogImageResponses];
+
+export type ListPendingImageApprovalCatalogItemsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/internal_mcp_catalog/pending-image-approval';
+};
+
+export type ListPendingImageApprovalCatalogItemsErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+            internal_code?: string;
+        };
+    };
+};
+
+export type ListPendingImageApprovalCatalogItemsError = ListPendingImageApprovalCatalogItemsErrors[keyof ListPendingImageApprovalCatalogItemsErrors];
+
+export type ListPendingImageApprovalCatalogItemsResponses = {
+    /**
+     * Default Response
+     */
+    200: Array<{
+        id: string;
+        name: string;
+        version: string | null;
+        description: string | null;
+        instructions: string | null;
+        repository: string | null;
+        installationCommand: string | null;
+        requiresAuth: boolean;
+        authDescription: string | null;
+        authFields: Array<{
+            name: string;
+            label: string;
+            type: string;
+            required: boolean;
+            description?: string;
+        }> | null;
+        serverType: 'local' | 'remote' | 'builtin' | 'app';
+        multitenant: boolean;
+        dynamicConnectionMcpServerId: string | null;
+        serverUrl: string | null;
+        docsUrl: string | null;
+        clientSecretId: string | null;
+        localConfigSecretId: string | null;
+        localConfig: {
+            command?: string;
+            arguments?: Array<string>;
+            environment?: Array<{
+                key: string;
+                type: 'plain_text' | 'secret' | 'boolean' | 'number';
+                value?: string;
+                promptOnInstallation: boolean;
+                required?: boolean;
+                description?: string;
+                default?: LocalConfigEnvironmentDefault;
+                mounted?: boolean;
+            }>;
+            envFrom?: Array<{
+                type: 'secret' | 'configMap';
+                name: string;
+                prefix?: string;
+            }>;
+            dockerImage?: string;
+            serviceAccount?: string;
+            transportType?: 'stdio' | 'streamable-http';
+            httpPort?: number;
+            httpPath?: string;
+            nodePort?: number;
+            imagePullSecrets?: Array<{
+                source: 'existing';
+                name: string;
+            } | {
+                source: 'credentials';
+                server: string;
+                username: string;
+                password?: string;
+                email?: string;
+            }>;
+        } | null;
+        deploymentSpecYaml: string | null;
+        userConfig: {
+            [key: string]: UserConfigField;
+        } | null;
+        oauthConfig: {
+            name: string;
+            server_url: string;
+            grant_type?: 'authorization_code' | 'client_credentials';
+            auth_server_url?: string;
+            authorization_endpoint?: string;
+            resource_metadata_url?: string;
+            client_id: string;
+            client_secret?: string;
+            audience?: string;
+            resource?: string;
+            redirect_uris: Array<string>;
+            scopes: Array<string>;
+            description?: string;
+            well_known_url?: string;
+            default_scopes: Array<string>;
+            supports_resource_metadata: boolean;
+            generic_oauth?: boolean;
+            token_endpoint?: string;
+            access_token_env_var?: string;
+            requires_proxy?: boolean;
+            provider_name?: string;
+            browser_auth?: boolean;
+            streamable_http_url?: string;
+            streamable_http_port?: number;
+        } | null;
+        enterpriseManagedConfig: {
+            identityProviderId?: string;
+            assertionMode?: 'exchange' | 'passthrough';
+            resourceType?: 'mcp' | 'oauth_protected_resource' | 'secret' | 'service_account' | 'custom_http';
+            resourceIdentifier?: string;
+            requestedIssuer?: string;
+            requestedCredentialType?: 'id_jag' | 'bearer_token' | 'secret' | 'service_account' | 'opaque_json';
+            scopes?: Array<string>;
+            audience?: string;
+            clientIdOverride?: string;
+            clientSecretOverride?: string;
+            tokenInjectionMode?: 'authorization_bearer' | 'raw_authorization' | 'header' | 'env' | 'body_field';
+            headerName?: string;
+            envVarName?: string;
+            bodyFieldName?: string;
+            responseFieldPath?: string;
+            fallbackMode?: 'fail_closed' | 'fallback_to_dynamic' | 'fallback_to_static';
+            cacheTtlSeconds?: number;
+        } | null;
+        icon: string | null;
+        organizationId: string | null;
+        authorId: string | null;
+        scope: 'personal' | 'team' | 'org';
+        clonedFrom: string | null;
+        environmentId: string | null;
+        catalogReinstallRequired: boolean;
+        catalogItemApprovalStatus: string | null;
+        catalogItemApprovalReason: string | null;
+        catalogItemApprovalReviewedBy: string | null;
+        catalogItemApprovalReviewedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        labels: Array<{
+            key: string;
+            value: string;
+        }>;
+        teams: Array<{
+            id: string;
+            name: string;
+        }>;
+        authorName?: string | null;
+    }>;
+};
+
+export type ListPendingImageApprovalCatalogItemsResponse = ListPendingImageApprovalCatalogItemsResponses[keyof ListPendingImageApprovalCatalogItemsResponses];
+
+export type ApproveCatalogItemImageData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/internal_mcp_catalog/{id}/approve';
+};
+
+export type ApproveCatalogItemImageErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+            internal_code?: string;
+        };
+    };
+};
+
+export type ApproveCatalogItemImageError = ApproveCatalogItemImageErrors[keyof ApproveCatalogItemImageErrors];
+
+export type ApproveCatalogItemImageResponses = {
+    /**
+     * Default Response
+     */
+    200: {
+        id: string;
+        name: string;
+        version: string | null;
+        description: string | null;
+        instructions: string | null;
+        repository: string | null;
+        installationCommand: string | null;
+        requiresAuth: boolean;
+        authDescription: string | null;
+        authFields: Array<{
+            name: string;
+            label: string;
+            type: string;
+            required: boolean;
+            description?: string;
+        }> | null;
+        serverType: 'local' | 'remote' | 'builtin' | 'app';
+        multitenant: boolean;
+        dynamicConnectionMcpServerId: string | null;
+        serverUrl: string | null;
+        docsUrl: string | null;
+        clientSecretId: string | null;
+        localConfigSecretId: string | null;
+        localConfig: {
+            command?: string;
+            arguments?: Array<string>;
+            environment?: Array<{
+                key: string;
+                type: 'plain_text' | 'secret' | 'boolean' | 'number';
+                value?: string;
+                promptOnInstallation: boolean;
+                required?: boolean;
+                description?: string;
+                default?: LocalConfigEnvironmentDefault;
+                mounted?: boolean;
+            }>;
+            envFrom?: Array<{
+                type: 'secret' | 'configMap';
+                name: string;
+                prefix?: string;
+            }>;
+            dockerImage?: string;
+            serviceAccount?: string;
+            transportType?: 'stdio' | 'streamable-http';
+            httpPort?: number;
+            httpPath?: string;
+            nodePort?: number;
+            imagePullSecrets?: Array<{
+                source: 'existing';
+                name: string;
+            } | {
+                source: 'credentials';
+                server: string;
+                username: string;
+                password?: string;
+                email?: string;
+            }>;
+        } | null;
+        deploymentSpecYaml: string | null;
+        userConfig: {
+            [key: string]: UserConfigField;
+        } | null;
+        oauthConfig: {
+            name: string;
+            server_url: string;
+            grant_type?: 'authorization_code' | 'client_credentials';
+            auth_server_url?: string;
+            authorization_endpoint?: string;
+            resource_metadata_url?: string;
+            client_id: string;
+            client_secret?: string;
+            audience?: string;
+            resource?: string;
+            redirect_uris: Array<string>;
+            scopes: Array<string>;
+            description?: string;
+            well_known_url?: string;
+            default_scopes: Array<string>;
+            supports_resource_metadata: boolean;
+            generic_oauth?: boolean;
+            token_endpoint?: string;
+            access_token_env_var?: string;
+            requires_proxy?: boolean;
+            provider_name?: string;
+            browser_auth?: boolean;
+            streamable_http_url?: string;
+            streamable_http_port?: number;
+        } | null;
+        enterpriseManagedConfig: {
+            identityProviderId?: string;
+            assertionMode?: 'exchange' | 'passthrough';
+            resourceType?: 'mcp' | 'oauth_protected_resource' | 'secret' | 'service_account' | 'custom_http';
+            resourceIdentifier?: string;
+            requestedIssuer?: string;
+            requestedCredentialType?: 'id_jag' | 'bearer_token' | 'secret' | 'service_account' | 'opaque_json';
+            scopes?: Array<string>;
+            audience?: string;
+            clientIdOverride?: string;
+            clientSecretOverride?: string;
+            tokenInjectionMode?: 'authorization_bearer' | 'raw_authorization' | 'header' | 'env' | 'body_field';
+            headerName?: string;
+            envVarName?: string;
+            bodyFieldName?: string;
+            responseFieldPath?: string;
+            fallbackMode?: 'fail_closed' | 'fallback_to_dynamic' | 'fallback_to_static';
+            cacheTtlSeconds?: number;
+        } | null;
+        icon: string | null;
+        organizationId: string | null;
+        authorId: string | null;
+        scope: 'personal' | 'team' | 'org';
+        clonedFrom: string | null;
+        environmentId: string | null;
+        catalogReinstallRequired: boolean;
+        catalogItemApprovalStatus: string | null;
+        catalogItemApprovalReason: string | null;
+        catalogItemApprovalReviewedBy: string | null;
+        catalogItemApprovalReviewedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        labels: Array<{
+            key: string;
+            value: string;
+        }>;
+        teams: Array<{
+            id: string;
+            name: string;
+        }>;
+        authorName?: string | null;
+    };
+};
+
+export type ApproveCatalogItemImageResponse = ApproveCatalogItemImageResponses[keyof ApproveCatalogItemImageResponses];
 
 export type DeleteInternalMcpCatalogItemByNameData = {
     body?: never;
@@ -51843,6 +52289,7 @@ export type GetOrganizationResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -52137,6 +52584,7 @@ export type UpdateAppearanceSettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -52304,6 +52752,7 @@ export type UpdateSecuritySettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -52469,6 +52918,7 @@ export type UpdateLlmSettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -52636,6 +53086,7 @@ export type UpdateAgentSettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -52813,6 +53264,7 @@ export type UpdateConnectionSettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -52833,6 +53285,7 @@ export type UpdateDefaultEnvironmentData = {
         } | null;
         restricted?: boolean;
         validationRegex?: string | null;
+        trustedImageRegistries?: Array<string> | null;
     };
     path?: never;
     query?: never;
@@ -52987,6 +53440,7 @@ export type UpdateDefaultEnvironmentResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -53152,6 +53606,7 @@ export type UpdateAuthSettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -53319,6 +53774,7 @@ export type UpdateKnowledgeSettingsResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -53481,6 +53937,7 @@ export type DropEmbeddingConfigResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };
@@ -53732,6 +54189,7 @@ export type CompleteOnboardingResponses = {
         } | null;
         defaultEnvironmentRestricted: boolean;
         defaultEnvironmentValidationRegex: string | null;
+        defaultEnvironmentTrustedImageRegistries: Array<string> | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
     };

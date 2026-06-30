@@ -13,6 +13,7 @@ import { sanitizeSvg } from "@/utils/sanitize-svg";
 import {
   NetworkPolicyInputSchema,
   NetworkPolicySchema,
+  TrustedImageRegistriesSchema,
   ValidationRegexSchema,
 } from "./environment";
 import { LimitCleanupIntervalSchema } from "./limit";
@@ -340,6 +341,8 @@ const extendedFields = {
   connectionBaseUrls: z.array(ConnectionBaseUrlSchema).nullable(),
   connectionDefaultProviderKeys: ConnectionDefaultProviderKeysSchema.nullable(),
   defaultNetworkPolicy: NetworkPolicySchema.nullable(),
+  defaultEnvironmentTrustedImageRegistries:
+    TrustedImageRegistriesSchema.nullable(),
 };
 
 const InternalSelectOrganizationSchema = createSelectSchema(
@@ -476,6 +479,7 @@ export const UpdateDefaultEnvironmentSchema = z.object({
   networkPolicy: NetworkPolicyInputSchema.nullable().optional(),
   restricted: z.boolean().optional(),
   validationRegex: ValidationRegexSchema.nullable().optional(),
+  trustedImageRegistries: TrustedImageRegistriesSchema.nullable().optional(),
 });
 
 export type UpdateDefaultEnvironment = z.infer<

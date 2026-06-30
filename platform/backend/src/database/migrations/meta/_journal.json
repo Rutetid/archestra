@@ -2220,6 +2220,13 @@
       "when": 1782762892398,
       "tag": "0316_famous_raider",
       "breakpoints": true
+    },
+    {
+      "idx": 317,
+      "version": "7",
+      "when": 1782816900531,
+      "tag": "0317_legal_kitty_pryde",
+      "breakpoints": true
     }
   ]
 }
