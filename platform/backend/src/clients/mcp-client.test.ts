@@ -990,6 +990,164 @@ describe("McpClient", () => {
         expect(mockCallTool).toHaveBeenCalledTimes(1);
       });
 
+      test("no self-service install link when the tool's catalog item is another user's personal server", async ({
+        makeMember,
+        makeOrganization,
+        makeUser,
+      }) => {
+        const org = await makeOrganization();
+        const owner = await makeUser();
+        await makeMember(owner.id, org.id, { role: "member" });
+        const caller = await makeUser();
+        await makeMember(caller.id, org.id, { role: "member" });
+
+        // A personal-scope catalog item owned by `owner`, invisible to `caller`.
+        const catalogItem = await InternalMcpCatalogModel.create(
+          {
+            name: `personal-${randomUUID().slice(0, 8)}`,
+            serverType: "remote",
+            serverUrl: "https://example.com/mcp",
+            scope: "personal",
+          },
+          { organizationId: org.id, authorId: owner.id },
+        );
+        const tool = await ToolModel.createToolIfNotExists({
+          name: `${catalogItem.name}__do_thing`,
+          description: "Personal-server tool",
+          parameters: {},
+          catalogId: catalogItem.id,
+        });
+        await AgentToolModel.create(agentId, tool.id, {
+          credentialResolutionMode: "dynamic",
+        });
+
+        const result = await mcpClient.executeToolCallForOwner(
+          { id: "call_deadend", name: tool.name, arguments: {} },
+          agentOwner(agentId),
+          userToken(caller.id, org.id),
+        );
+
+        expect(result.isError).toBe(true);
+        const archestraError = result?._meta?.archestraError as
+          | { type?: string; action?: string; actionUrl?: string }
+          | undefined;
+        expect(archestraError?.type).toBe("auth_required");
+        // The caller cannot install another user's personal item, so no
+        // self-service install link is offered.
+        expect(archestraError?.actionUrl).toBeUndefined();
+        expect(archestraError?.action).toBeUndefined();
+        expect(result?.error).not.toContain("/mcp/registry?install=");
+        expect(result?.error).not.toMatch(/visit[^.]*https?:\/\//i);
+        // ...and it names a remediation the caller can actually pursue.
+        expect(result?.error).toMatch(/owner|administrator|share/i);
+      });
+
+      test("still offers the install link when the caller can access the catalog (org-scoped, no install yet)", async ({
+        makeMember,
+        makeOrganization,
+        makeUser,
+      }) => {
+        const org = await makeOrganization();
+        const caller = await makeUser();
+        await makeMember(caller.id, org.id, { role: "member" });
+
+        // An org-scoped catalog item the caller CAN see and install; with no
+        // install yet, the self-service install link is legitimate and MUST be
+        // preserved even though the caller-access check runs (orgId present).
+        const catalogItem = await InternalMcpCatalogModel.create(
+          {
+            name: `org-${randomUUID().slice(0, 8)}`,
+            serverType: "remote",
+            serverUrl: "https://example.com/mcp",
+            scope: "org",
+          },
+          { organizationId: org.id },
+        );
+        const tool = await ToolModel.createToolIfNotExists({
+          name: `${catalogItem.name}__do_thing`,
+          description: "Org-server tool",
+          parameters: {},
+          catalogId: catalogItem.id,
+        });
+        await AgentToolModel.create(agentId, tool.id, {
+          credentialResolutionMode: "dynamic",
+        });
+
+        const result = await mcpClient.executeToolCallForOwner(
+          { id: "call_install", name: tool.name, arguments: {} },
+          agentOwner(agentId),
+          userToken(caller.id, org.id),
+        );
+
+        expect(result.isError).toBe(true);
+        const archestraError = result?._meta?.archestraError as
+          | { type?: string; action?: string; actionUrl?: string }
+          | undefined;
+        expect(archestraError?.type).toBe("auth_required");
+        expect(archestraError?.action).toBe("install_mcp_credentials");
+        expect(archestraError?.actionUrl).toContain(
+          `/mcp/registry?install=${catalogItem.id}`,
+        );
+      });
+
+      test("still offers the install link for a team-token caller (fail-open: no user identity to check accessibility against)", async ({
+        makeMember,
+        makeOrganization,
+        makeTeam,
+        makeUser,
+      }) => {
+        const org = await makeOrganization();
+        const owner = await makeUser();
+        await makeMember(owner.id, org.id, { role: "member" });
+        const team = await makeTeam(org.id, owner.id);
+
+        // A personal-scope catalog item owned by `owner`. A team token has no
+        // user identity, so accessibility cannot be evaluated for it; the
+        // fail-open MUST keep offering the install link (the caller behind the
+        // token may still be able to act on it). If accessibility were ever
+        // computed for team tokens, this personal item would be inaccessible
+        // and the link would be dropped — so this pin guards the fail-open.
+        const catalogItem = await InternalMcpCatalogModel.create(
+          {
+            name: `personal-${randomUUID().slice(0, 8)}`,
+            serverType: "remote",
+            serverUrl: "https://example.com/mcp",
+            scope: "personal",
+          },
+          { organizationId: org.id, authorId: owner.id },
+        );
+        const tool = await ToolModel.createToolIfNotExists({
+          name: `${catalogItem.name}__do_thing`,
+          description: "Personal-server tool",
+          parameters: {},
+          catalogId: catalogItem.id,
+        });
+        await AgentToolModel.create(agentId, tool.id, {
+          credentialResolutionMode: "dynamic",
+        });
+
+        const result = await mcpClient.executeToolCallForOwner(
+          { id: "call_teamtoken", name: tool.name, arguments: {} },
+          agentOwner(agentId),
+          {
+            tokenId: "tok-team",
+            teamId: team.id,
+            isOrganizationToken: false,
+            organizationId: org.id,
+          },
+        );
+
+        expect(result.isError).toBe(true);
+        const archestraError = result?._meta?.archestraError as
+          | { type?: string; action?: string; actionUrl?: string }
+          | undefined;
+        expect(archestraError?.type).toBe("auth_required");
+        expect(archestraError?.action).toBe("install_mcp_credentials");
+        expect(archestraError?.actionUrl).toContain(
+          `/mcp/registry?install=${catalogItem.id}`,
+        );
+      });
+
       test("All-tools mode ignores a static assignment pin and uses the server's connection policy", async ({
         makeAgent,
         makeMember,
