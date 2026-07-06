@@ -504,6 +504,28 @@ export function LlmProviderApiKeyForm({
     form.setValue("vaultSecretKey", null);
   }, [form, scope]);
 
+  // Clear provider-specific credentials when the provider changes, so a key (or
+  // base URL / AWS credential) typed for one provider can't be submitted against
+  // another. Create only — the provider picker is disabled while editing. Skips
+  // the initial render via the ref so it never wipes prefilled defaults.
+  const prevProviderRef = useRef(provider);
+  useEffect(() => {
+    if (isEditMode || prevProviderRef.current === provider) return;
+    prevProviderRef.current = provider;
+    form.setValue("apiKey", null);
+    form.setValue("baseUrl", null);
+    form.setValue("inferenceBaseUrl", null);
+    form.setValue("extraHeaders", []);
+    form.setValue("vaultSecretPath", null);
+    form.setValue("vaultSecretKey", null);
+    form.setValue("awsAccessKeyId", null);
+    form.setValue("awsSecretAccessKey", null);
+    form.setValue("awsSessionToken", null);
+    // Reset the Bedrock auth method too: a stale "iam" would otherwise keep the
+    // API key input hidden after switching to a non-Bedrock provider.
+    form.setValue("bedrockAuthMethod", "api-key");
+  }, [form, isEditMode, provider]);
+
   const vaultSecretSelector =
     scope === "team" ? (
       <InlineVaultSecretSelector
