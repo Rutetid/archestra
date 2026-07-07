@@ -2360,6 +2360,13 @@
       "when": 1783363575412,
       "tag": "0336_backfill-sandbox-and-auto-mode-tool-assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 337,
+      "version": "7",
+      "when": 1783388553796,
+      "tag": "0337_nervous_stick",
+      "breakpoints": true
     }
   ]
 }
