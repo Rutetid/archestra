@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableCode } from "@/components/copyable-code";
+import { useSetCredentialsAction } from "@/components/credentials-action-context";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ExpirationDateTimeField } from "@/components/expiration-date-time-field";
 import { FormDialog } from "@/components/form-dialog";
@@ -71,7 +72,6 @@ import {
   useDeleteVirtualApiKey,
   useUpdateVirtualApiKey,
 } from "@/lib/virtual-api-keys.query";
-import { useSetCredentialsAction } from "../layout";
 import { OwnerSelectField, shouldShowOwnerField } from "./owner-select-field";
 
 type VirtualKeyWithParent =
