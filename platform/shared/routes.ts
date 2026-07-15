@@ -659,6 +659,7 @@ export const RouteId = {
   GetAppVersions: "getAppVersions",
   GetAppVersion: "getAppVersion",
   GetAppTools: "getAppTools",
+  GetAppAssignableBuiltinTools: "getAppAssignableBuiltinTools",
   AssignToolToApp: "assignToolToApp",
   UnassignToolFromApp: "unassignToolFromApp",
   GetAppTemplates: "getAppTemplates",
