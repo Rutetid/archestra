@@ -20,12 +20,16 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use baton_contracts::{Contracts, ContractsError};
-use baton_core::{DuplicateContract, DuplicateRegistration, PolicyEngine, ToolName};
+use baton_core::{AudienceRule, ContractRefused, PolicyEngine, RegistrationRefused, RegistryFrozen, ToolName, UserId};
 use serde::Deserialize;
 
 /// The escalation tool the gateway itself serves; a scenario tool cannot
 /// shadow it, and the policy cannot contract it.
 pub const ESCALATE_TOOL: &str = "baton__escalate";
+/// The reserved MCP tool the agent's final answer must flow through: the
+/// gateway checks it at the engine's emission sink and returns only the
+/// permitted rendering. Reserved on the same terms as `ESCALATE_TOOL`.
+pub const RESPOND_TOOL: &str = "baton__respond";
 
 /// Which of the two config files an error came from — startup messages name
 /// the offending file.
@@ -44,12 +48,14 @@ pub enum ConfigError {
     #[error(transparent)]
     Contracts(#[from] ContractsError),
     #[error(transparent)]
-    DuplicateContract(#[from] DuplicateContract),
+    ContractRefused(#[from] ContractRefused),
     #[error(transparent)]
-    DuplicateRegistration(#[from] DuplicateRegistration),
+    RegistrationRefused(#[from] RegistrationRefused),
+    #[error(transparent)]
+    RegistryFrozen(#[from] RegistryFrozen),
     #[error("duplicate tool `{0}`")]
     DuplicateTool(String),
-    #[error("tool name `{ESCALATE_TOOL}` is reserved for the gateway's escalation tool")]
+    #[error("tool name `{ESCALATE_TOOL}` and `{RESPOND_TOOL}` are reserved for the gateway's own tools")]
     ReservedToolName,
     #[error("the policy contracts `{ESCALATE_TOOL}`, which is reserved for the gateway's escalation tool")]
     ReservedContractName,
@@ -65,12 +71,16 @@ impl ConfigError {
     /// Attribute the error to the config file it came from.
     pub fn source_file(&self) -> ConfigFile {
         match self {
-            Self::Parse(_) | Self::DuplicateTool(_) | Self::ReservedToolName | Self::BadResultTemplate { .. } => {
-                ConfigFile::Tools
-            }
+            // `RegistryFrozen` reaches here only from the response policy,
+            // which the tool-catalog file declares.
+            Self::Parse(_)
+            | Self::DuplicateTool(_)
+            | Self::ReservedToolName
+            | Self::RegistryFrozen(_)
+            | Self::BadResultTemplate { .. } => ConfigFile::Tools,
             Self::Contracts(_)
-            | Self::DuplicateContract(_)
-            | Self::DuplicateRegistration(_)
+            | Self::ContractRefused(_)
+            | Self::RegistrationRefused(_)
             | Self::ReservedContractName
             | Self::ContractWithoutTool(_)
             | Self::UnknownRecipientsArg { .. } => ConfigFile::Policy,
@@ -128,6 +138,22 @@ impl GatewayConfig {
 struct RawConfig {
     #[serde(default, rename = "tool")]
     tools: Vec<ToolConfig>,
+    /// Who reads the conversation. When present the engine registers the
+    /// response-sink policy, and the agent's final answer is checked as an
+    /// emission flow through `baton__respond`. Absent, the emission check
+    /// fails closed (no registered response policy).
+    ///
+    /// This lives with the tool catalog rather than the policy file because
+    /// the canonical `baton-contracts` dialect models tool contracts and
+    /// authorities; the response sink is neither.
+    #[serde(default)]
+    response: Option<ResponseConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponseConfig {
+    readers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,7 +172,7 @@ impl RawConfig {
         let mut tools = BTreeMap::new();
 
         for tool in self.tools {
-            if tool.name == ESCALATE_TOOL {
+            if tool.name == ESCALATE_TOOL || tool.name == RESPOND_TOOL {
                 return Err(ConfigError::ReservedToolName);
             }
             let name = ToolName::new(&tool.name);
@@ -171,7 +197,7 @@ impl RawConfig {
         // so a contracted `baton__escalate` reports as reserved, not as a
         // contract without a tool.
         for contract in &policy.contracts {
-            if contract.name.as_str() == ESCALATE_TOOL {
+            if contract.name.as_str() == ESCALATE_TOOL || contract.name.as_str() == RESPOND_TOOL {
                 return Err(ConfigError::ReservedContractName);
             }
             let Some(sim) = tools.get(&contract.name) else {
@@ -197,6 +223,18 @@ impl RawConfig {
         }
         for authority in policy.authorities {
             engine.register_authority(authority)?;
+        }
+
+        // The response sink: the agent's final answer is checked against this
+        // audience, and only the permitted rendering is delivered.
+        if let Some(response) = &self.response {
+            engine = engine.with_response_policy(baton_core::ResponsePolicy {
+                requires: baton_core::Requirements {
+                    audience: AudienceRule::FromRecipients,
+                    ..baton_core::Requirements::default()
+                },
+                readers: response.readers.iter().map(UserId::new).collect(),
+            })?;
         }
 
         Ok(GatewayConfig { engine, tools })

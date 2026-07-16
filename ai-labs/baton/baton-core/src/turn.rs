@@ -1,11 +1,15 @@
 //! Turns, the trajectory, and its engine-owned admission paths.
 //!
-//! A trajectory owns all per-conversation state: the immutable value store,
-//! the turn sequence (which references values, never free strings), the
-//! monotone control-plane state (past effects + audit), the pending action
-//! slot, and the [`Revision`] that advances on every mutation. Capabilities
-//! bind to the revision, so *any* state change — a new value, a constrained
-//! action, an audit event, a turn — invalidates everything minted before it.
+//! A trajectory owns all per-conversation state, authoritative in its
+//! append-only event log: every public mutation prevalidates, then commits
+//! one atomic batch of facts. Every derived read model — labels, provenance,
+//! the turn sequence, the committed effect surface, the audit history, the
+//! pending slots — is a [`TrajectoryProjection`] of that log, rebuilt in one
+//! place after each batch; the value store holds nothing but the opaque
+//! bodies the log deliberately omits. The [`Revision`] is the digest of the
+//! event frontier — it advances once per accepted batch, so capabilities
+//! bound to it are invalidated by *any* state change — a new value, a
+//! constrained action, an audit record, a turn.
 //!
 //! Admission is engine-owned: [`Trajectory::ingress`] is the only
 //! caller-labeled path (the explicit trust boundary); a model output's label
@@ -22,13 +26,16 @@ use tracing::debug;
 use std::collections::BTreeSet;
 
 use crate::ToolName;
-use crate::audit::{AuditEvent, TrajectoryState};
+use crate::audit::AuditEvent;
 use crate::dimension::UserId;
 use crate::engine::{CanonicalRequest, DispatchReceipt, ExecutionToken, ReceiptParts, RejectedToken};
-use crate::plan::{NonEmptyVec, Posture, RemedyPlan, TransitionSpec};
-use crate::request::{ActionState, PendingAction, ToolRequest};
-use crate::revision::{ActionId, PlanId, Revision, TransitionId, TurnId, ValueId};
-use crate::value::{OpaqueValue, StoredValue, UnknownValue, ValueLabel, ValueStore};
+use crate::event::{EventSet, Fact, ValueOrigin};
+use crate::plan::{NonEmptyVec, RemedyPlan};
+use crate::projection::TrajectoryProjection;
+use crate::remedy::PlannedRemedy;
+use crate::request::{ActionState, EmissionRequest, PendingAction, PendingEmission, ToolRequest};
+use crate::revision::{ActionId, FlowId, PlanId, Revision, TransitionId, TurnId, ValueId};
+use crate::value::{OpaqueValue, UnknownValue, ValueLabel, ValueRef, ValueStore};
 
 /// A user's contribution to a turn: who spoke, and whether they explicitly
 /// confirmed one named tool. The `confirms` field is structural, not a label:
@@ -48,17 +55,23 @@ pub enum Actor {
     Tool(ToolName),
 }
 
-/// Who may author an ingress turn. Tool results are deliberately absent:
-/// they enter a trajectory only through [`Trajectory::record_output`].
+/// Who may author an ingress turn: only a user. Tool results are deliberately
+/// absent: they enter a trajectory only through [`Trajectory::record_output`].
+/// Assistant output is likewise absent: it is admitted through
+/// [`Trajectory::admit_model_output`] under its dependency fold and crosses the
+/// mediation boundary only through the checked response sink — a caller-labeled
+/// assistant turn would bypass that check.
+///
+/// ```compile_fail
+/// // The bypass is unrepresentable: `Speaker` has no assistant constructor.
+/// let speaker = baton_core::Speaker::Assistant;
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Speaker {
-    User(UserTurn),
-    Assistant,
-}
+pub struct Speaker(UserTurn);
 
 impl Speaker {
     pub fn user(id: UserId) -> Self {
-        Self::User(UserTurn { id, confirms: None })
+        Self(UserTurn { id, confirms: None })
     }
 
     /// A user message that explicitly confirms one named tool. The
@@ -66,7 +79,7 @@ impl Speaker {
     /// not been spent by an action release — see
     /// [`Trajectory::pending_confirmation`].
     pub fn confirming(id: UserId, tool: ToolName) -> Self {
-        Self::User(UserTurn {
+        Self(UserTurn {
             id,
             confirms: Some(tool),
         })
@@ -79,6 +92,23 @@ impl Speaker {
 pub struct Turn {
     pub actor: Actor,
     pub value: ValueId,
+}
+
+/// Which pending target a derivation substitutes into: the (at most one)
+/// pending tool action's argument tree, or the (at most one) pending
+/// emission's body tree. The two slots are independent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReductionSite {
+    Action,
+    Emission,
+}
+
+/// Abandonment refused: the pending action was already released, so a
+/// dispatch is in flight — it closes only through its receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{action} is released with a dispatch in flight; close it through its receipt")]
+pub struct DispatchInFlight {
+    pub action: ActionId,
 }
 
 /// Identity of one trajectory instance, unique within the process; every
@@ -104,22 +134,25 @@ impl fmt::Display for TrajectoryId {
 #[derive(Debug)]
 pub struct Trajectory {
     id: TrajectoryId,
-    turns: Vec<Turn>,
+    /// The authoritative append-only state: every mutation prevalidates, then
+    /// commits one atomic batch of facts here.
+    events: EventSet,
+    /// Every derived read model, reprojected from `events` after each batch —
+    /// the one build path, so no field can drift from the log.
+    view: TrajectoryProjection,
+    /// The opaque bodies, which the log deliberately does not carry.
     store: ValueStore,
-    state: TrajectoryState,
-    revision: Revision,
-    pending: Option<PendingAction>,
     next_action: u64,
+    next_flow: u64,
     next_transition: u64,
-    /// The remedy plans minted for the current blocked flow, if any. Bound to
-    /// the revision they were computed against; any state change stales them.
+    next_grant: u64,
+    /// Side cache of the remedy plans minted for the current blocked flow:
+    /// predictions, not state — storing them appends nothing and advances
+    /// nothing (the per-evaluation `CheckPerformed` fact supplies the
+    /// advance); they bind to the basis they were computed against, so any
+    /// state change stales them.
     plans: Vec<RemedyPlan>,
     next_plan: u64,
-    /// The confirming turn most recently spent by an action release. A
-    /// receipt-declared failure closes the action without appending a turn,
-    /// so without this marker the confirming turn would become the newest
-    /// turn again and its confirmation would resurrect.
-    spent_confirmation: Option<TurnId>,
 }
 
 impl Default for Trajectory {
@@ -129,45 +162,66 @@ impl Default for Trajectory {
 }
 
 impl Trajectory {
+    /// A fresh trajectory with a process-unique identity — every capability
+    /// binds to it, so this must never be derived (`TrajectoryId::default()`
+    /// would hand every trajectory the same id).
     pub fn new() -> Self {
         Self {
             id: TrajectoryId::next(),
-            turns: Vec::new(),
+            events: EventSet::default(),
+            view: TrajectoryProjection::default(),
             store: ValueStore::default(),
-            state: TrajectoryState::default(),
-            revision: Revision::INITIAL,
-            pending: None,
             next_action: 0,
+            next_flow: 0,
             next_transition: 0,
+            next_grant: 0,
             plans: Vec::new(),
             next_plan: 0,
-            spent_confirmation: None,
         }
+    }
+
+    /// The append-only event set — the authoritative state; every reader
+    /// surface below is a projection of it.
+    pub fn events(&self) -> &EventSet {
+        &self.events
+    }
+
+    /// The derived read models, reprojected from the log after each batch.
+    pub fn view(&self) -> &TrajectoryProjection {
+        &self.view
     }
 
     pub fn id(&self) -> TrajectoryId {
         self.id
     }
 
+    /// The revision is the digest of the event frontier: it advances exactly
+    /// when a batch of facts is accepted, so every capability bound to it is
+    /// invalidated by any state change.
     pub fn revision(&self) -> Revision {
-        self.revision
+        Revision::of_frontier(self.events.frontier())
     }
 
     pub fn turns(&self) -> &[Turn] {
-        &self.turns
+        self.view.turns()
     }
 
-    pub fn store(&self) -> &ValueStore {
-        &self.store
+    /// The monotone committed effect surface.
+    pub fn past_effects(&self) -> &crate::dimension::Effects {
+        self.view.committed_effects()
     }
 
-    /// The monotone control-plane state: past effects and the audit log.
-    pub fn state(&self) -> &TrajectoryState {
-        &self.state
+    /// The control-plane audit history.
+    pub fn audit(&self) -> &[AuditEvent] {
+        self.view.audit()
     }
 
     pub fn pending_action(&self) -> Option<&PendingAction> {
-        self.pending.as_ref()
+        self.view.pending_action()
+    }
+
+    pub fn pending_emission(&self) -> Option<&PendingEmission> {
+        self.view.pending_emission()
     }
 
     /// The remedy plans of the most recent remediable block. Only plans
@@ -176,23 +230,45 @@ impl Trajectory {
         &self.plans
     }
 
-    /// Convenience lookup in the value store.
-    pub fn value(&self, id: ValueId) -> Result<&StoredValue, UnknownValue> {
-        self.store.get(id)
+    /// One admitted value: its bytes from the store, its label and provenance
+    /// from the projection.
+    pub fn value(&self, id: ValueId) -> Result<ValueRef<'_>, UnknownValue> {
+        Ok(ValueRef::new(
+            self.store.body(id)?,
+            self.view.label(id).ok_or(UnknownValue { id })?,
+            self.view.provenance_of(id).ok_or(UnknownValue { id })?,
+        ))
+    }
+
+    /// The label of an admitted value.
+    pub(crate) fn label(&self, id: ValueId) -> Result<&ValueLabel, UnknownValue> {
+        self.view.label(id).ok_or(UnknownValue { id })
+    }
+
+    /// The bodies, for rendering an argument tree. Labels and provenance live
+    /// in the projection, never here.
+    pub fn store(&self) -> &ValueStore {
+        &self.store
     }
 
     /// Admit a message at the explicit trust boundary and append its turn.
     /// The label is trusted input from the embedding harness — this is the
     /// only caller-labeled admission path.
     pub fn ingress(&mut self, speaker: Speaker, label: ValueLabel, body: OpaqueValue) -> ValueId {
-        let turn_id = TurnId::new(self.turns.len() as u64);
-        let value = self.store.admit_ingress(turn_id, label, body);
-        let actor = match speaker {
-            Speaker::User(user) => Actor::User(user),
-            Speaker::Assistant => Actor::Assistant,
-        };
-        self.turns.push(Turn { actor, value });
-        self.advance();
+        let turn_id = self.next_turn_id();
+        let value = self.store.next_id();
+        self.commit(vec![
+            Fact::ValueAdmitted {
+                value,
+                origin: ValueOrigin::Ingress { turn: turn_id, label },
+            },
+            Fact::TurnAppended {
+                turn: turn_id,
+                actor: Actor::User(speaker.0),
+                value,
+            },
+        ]);
+        self.store_body(value, body);
         value
     }
 
@@ -206,8 +282,15 @@ impl Trajectory {
         reads: BTreeSet<ValueId>,
         control: BTreeSet<ValueId>,
     ) -> Result<ValueId, UnknownValue> {
-        let value = self.store.admit_model_output(body, reads, control)?;
-        self.advance();
+        // Prevalidate the dependency sets before building the batch, so a
+        // refusal writes nothing anywhere.
+        self.view.fold_labels(reads.iter().chain(control.iter()))?;
+        let value = self.store.next_id();
+        self.commit(vec![Fact::ValueAdmitted {
+            value,
+            origin: ValueOrigin::ModelOutput { reads, control },
+        }]);
+        self.store_body(value, body);
         Ok(value)
     }
 
@@ -232,14 +315,14 @@ impl Trajectory {
                 this: self.id,
             });
         }
-        if parts.revision != self.revision {
-            debug!(minted_at = %parts.revision, current = %self.revision, "release: rejected (stale token)");
+        if parts.revision != self.revision() {
+            debug!(minted_at = %parts.revision, current = %self.revision(), "release: rejected (stale token)");
             return Err(RejectedToken::Stale {
                 minted_at: parts.revision,
-                current: self.revision,
+                current: self.revision(),
             });
         }
-        let rendered = match &self.pending {
+        let rendered = match self.view.pending_action() {
             // Only a not-yet-released action may be released: a `Released`
             // action already has a dispatch in flight, so a second release
             // would render and commit twice. (The token's revision binding
@@ -256,17 +339,15 @@ impl Trajectory {
         };
 
         // Dispatch boundary: commit may-effects before release.
-        self.state.commit_effects(parts.proposed_effects.clone());
-        self.state.record(AuditEvent::EffectsCommitted {
+        let mut batch = vec![Fact::EffectsCommitted {
             action: parts.action,
             effects: parts.proposed_effects.clone(),
-        });
-        self.spend_confirmation();
-        self.pending
-            .as_mut()
-            .expect("pending action validated above")
-            .mark_released();
-        self.advance();
+        }];
+        if let Some((turn, _)) = self.view.confirmation_available() {
+            batch.push(Fact::ConfirmationSpent { turn: *turn });
+        }
+        batch.push(Fact::ActionReleased { action: parts.action });
+        self.commit(batch);
         debug!(action = %parts.action, "release: effects committed, action released");
 
         let canonical = CanonicalRequest {
@@ -274,7 +355,7 @@ impl Trajectory {
             tool: parts.tool.clone(),
             rendered,
         };
-        let receipt = DispatchReceipt::from_token_parts(parts, self.revision);
+        let receipt = DispatchReceipt::from_token_parts(parts);
         Ok((canonical, receipt))
     }
 
@@ -283,16 +364,29 @@ impl Trajectory {
     /// tool turn is appended, and the action closes.
     pub fn record_output(&mut self, receipt: DispatchReceipt, body: OpaqueValue) -> Result<ValueId, RejectedToken> {
         let parts = self.validate_receipt(receipt)?;
-        let value = self
-            .store
-            .admit_tool_output(parts.action, parts.intrinsic, parts.arguments, parts.control, body)
-            .expect("receipt dependencies were validated at evaluate time");
-        self.turns.push(Turn {
-            actor: Actor::Tool(parts.tool),
-            value,
-        });
-        self.pending = None;
-        self.advance();
+        let turn_id = self.next_turn_id();
+        let value = self.store.next_id();
+        self.commit(vec![
+            Fact::ValueAdmitted {
+                value,
+                origin: ValueOrigin::ToolOutput {
+                    action: parts.action,
+                    intrinsic: parts.intrinsic,
+                    arguments: parts.arguments,
+                    control: parts.control,
+                },
+            },
+            Fact::TurnAppended {
+                turn: turn_id,
+                actor: Actor::Tool(parts.tool),
+                value,
+            },
+            Fact::ActionCompleted {
+                action: parts.action,
+                output: value,
+            },
+        ]);
+        self.store_body(value, body);
         debug!(action = %parts.action, %value, "record_output: recorded tool result");
         Ok(value)
     }
@@ -303,13 +397,16 @@ impl Trajectory {
     /// cannot authorize a second attempt.
     pub fn record_failure(&mut self, receipt: DispatchReceipt) -> Result<(), RejectedToken> {
         let parts = self.validate_receipt(receipt)?;
-        self.state.record(AuditEvent::DispatchFailed { action: parts.action });
-        self.pending = None;
-        self.advance();
+        self.commit(vec![Fact::DispatchFailed { action: parts.action }]);
         debug!(action = %parts.action, "record_failure: dispatch failed, action closed");
         Ok(())
     }
 
+    /// A receipt is validated by lifecycle, not revision: it closes a
+    /// dispatch that already happened, so an unrelated mutation after
+    /// release (a checked emission, a new value) must not wedge the released
+    /// action — only foreign, wrong-action, or already-closed receipts are
+    /// refused.
     fn validate_receipt(&self, receipt: DispatchReceipt) -> Result<ReceiptParts, RejectedToken> {
         let parts = receipt.into_parts();
         if parts.trajectory != self.id {
@@ -319,14 +416,7 @@ impl Trajectory {
                 this: self.id,
             });
         }
-        if parts.revision != self.revision {
-            debug!(minted_at = %parts.revision, current = %self.revision, "receipt rejected (stale)");
-            return Err(RejectedToken::Stale {
-                minted_at: parts.revision,
-                current: self.revision,
-            });
-        }
-        match &self.pending {
+        match self.view.pending_action() {
             Some(pending) if pending.id() == parts.action && pending.state() == ActionState::Released => Ok(parts),
             _ => {
                 debug!(action = %parts.action, "receipt rejected (action not pending/released)");
@@ -345,23 +435,43 @@ impl Trajectory {
         control: BTreeSet<ValueId>,
     ) -> Result<(ValueId, String), UnknownValue> {
         let rendered = crate::request::render(body, &self.store)?;
-        let value = self
-            .store
-            .admit_model_output(OpaqueValue::new(rendered.clone()), body.leaves(), control)?;
-        self.turns.push(Turn {
-            actor: Actor::Assistant,
-            value,
-        });
-        self.advance();
+        let reads = body.leaves();
+        self.view.fold_labels(reads.iter().chain(control.iter()))?;
+        let turn_id = self.next_turn_id();
+        let value = self.store.next_id();
+        // The batch's ResponseEmitted fact settles any pending emission.
+        self.commit(vec![
+            Fact::ValueAdmitted {
+                value,
+                origin: ValueOrigin::ModelOutput { reads, control },
+            },
+            Fact::TurnAppended {
+                turn: turn_id,
+                actor: Actor::Assistant,
+                value,
+            },
+            Fact::ResponseEmitted { value },
+        ]);
+        self.store_body(value, OpaqueValue::new(rendered.clone()));
         Ok((value, rendered))
     }
 
     /// Explicitly abandon the pending action (e.g. the harness dropped its
     /// token). Clears the slot and advances the revision, so the dropped
-    /// token can never be spent.
-    pub fn abandon_pending(&mut self) {
-        if self.pending.take().is_some() {
-            self.advance();
+    /// token can never be spent. Legal only while the action is still open:
+    /// a released action has a dispatch in flight and closes only through
+    /// its receipt ([`Trajectory::record_output`] /
+    /// [`Trajectory::record_failure`]) — abandoning it would let the same
+    /// request re-evaluate and dispatch a second time. No pending action is
+    /// a no-op.
+    pub fn abandon_pending(&mut self) -> Result<(), DispatchInFlight> {
+        match self.view.pending_action().map(|p| (p.id(), p.state())) {
+            Some((action, ActionState::Released)) => Err(DispatchInFlight { action }),
+            Some((action, _)) => {
+                self.commit(vec![Fact::ActionAbandoned { action }]);
+                Ok(())
+            }
+            None => Ok(()),
         }
     }
 
@@ -370,26 +480,7 @@ impl Trajectory {
     /// not already spent it. "A confirmation authorizes the immediately
     /// following action, never a later one."
     pub fn pending_confirmation(&self) -> Option<&ToolName> {
-        let newest = TurnId::new(self.turns.len().checked_sub(1)? as u64);
-        if self.spent_confirmation == Some(newest) {
-            return None;
-        }
-        match self.turns.last() {
-            Some(Turn {
-                actor: Actor::User(UserTurn {
-                    confirms: Some(tool), ..
-                }),
-                ..
-            }) => Some(tool),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn spend_confirmation(&mut self) {
-        if self.pending_confirmation().is_some() {
-            let newest = TurnId::new((self.turns.len() - 1) as u64);
-            self.spent_confirmation = Some(newest);
-        }
+        self.view.confirmation_available().map(|(_, tool)| tool)
     }
 
     pub(crate) fn set_pending(
@@ -399,37 +490,68 @@ impl Trajectory {
     ) -> ActionId {
         let id = ActionId::new(self.next_action);
         self.next_action += 1;
-        self.pending = Some(PendingAction::proposed(id, request, proposed_effects));
-        self.advance();
+        let flow = FlowId::new(self.next_flow);
+        self.next_flow += 1;
+        self.commit(vec![Fact::ActionProposed {
+            action: id,
+            flow,
+            request,
+            effects: proposed_effects,
+        }]);
         id
     }
 
     pub(crate) fn clear_pending(&mut self) {
-        if self.pending.take().is_some() {
-            self.advance();
+        if let Some(action) = self.view.pending_action().map(PendingAction::id) {
+            self.commit(vec![Fact::ActionAbandoned { action }]);
         }
+    }
+
+    /// Retain a remediable emission proposal as the pending emission,
+    /// opening its checked flow.
+    pub(crate) fn set_pending_emission(&mut self, request: EmissionRequest) -> FlowId {
+        let flow = FlowId::new(self.next_flow);
+        self.next_flow += 1;
+        self.commit(vec![Fact::EmissionProposed { flow, request }]);
+        flow
+    }
+
+    pub(crate) fn clear_pending_emission(&mut self) {
+        if let Some(flow) = self.view.pending_emission().map(PendingEmission::flow) {
+            self.commit(vec![Fact::EmissionAbandoned { flow }]);
+        }
+    }
+
+    /// Explicitly abandon the pending emission (e.g. the harness gave up on
+    /// remediating it). Clears the slot and advances the revision.
+    pub fn abandon_pending_emission(&mut self) {
+        self.clear_pending_emission();
     }
 
     /// Replace the stored remedy plans with freshly enumerated drafts,
     /// assigning ids and stamping the post-advance revision as their basis.
     pub(crate) fn store_plans(
         &mut self,
-        action: ActionId,
+        flow: FlowId,
+        action: Option<ActionId>,
         engine: crate::engine::EngineId,
-        drafts: Vec<(NonEmptyVec<TransitionSpec>, Posture)>,
+        drafts: Vec<NonEmptyVec<PlannedRemedy>>,
     ) -> Vec<RemedyPlan> {
-        self.advance();
-        let basis = self.revision;
+        // The check fact is a new occurrence per evaluation (re-entry
+        // included): it mirrors this unconditional advance 1:1 so the
+        // frontier can replace the revision at cutover without weakening
+        // cross-evaluation staleness.
+        self.commit(vec![Fact::CheckPerformed { flow, action }]);
+        let basis = self.revision();
         self.plans = drafts
             .into_iter()
-            .map(|(steps, final_postcondition)| {
+            .map(|steps| {
                 let id = PlanId::new(self.next_plan);
                 self.next_plan += 1;
                 RemedyPlan {
                     id,
-                    action,
+                    flow,
                     steps,
-                    final_postcondition,
                     basis,
                     engine,
                 }
@@ -439,8 +561,65 @@ impl Trajectory {
     }
 
     pub(crate) fn record_event(&mut self, event: AuditEvent) {
-        self.state.record(event);
-        self.advance();
+        self.commit(vec![Fact::ControlPlane { event }]);
+    }
+
+    /// Record an applied check-scoped authorization as its full one-off
+    /// grant lifecycle in one batch: issued, consumed by exactly this check
+    /// (referencing the flow and, for a tool flow, the pending action), and
+    /// audited. Consumption is keyed by the grant at event admission, so a
+    /// second consumption of the same grant is unrepresentable.
+    pub(crate) fn record_applied_authorization(
+        &mut self,
+        transition: TransitionId,
+        authorization: crate::remedy::Authorization,
+        authority: crate::audit::AuthorityName,
+        resolved: Vec<crate::contract::Violation>,
+    ) {
+        let grant = crate::revision::GrantId::new(self.next_grant);
+        self.next_grant += 1;
+        let crate::remedy::AuthorizationScope::PolicyCheck { flow } = *authorization.scope() else {
+            unreachable!(
+                "only check-scoped authorizations ride this path; durable and action scopes mint their value/marker instead"
+            );
+        };
+        let action = self
+            .view
+            .pending_action()
+            .filter(|pending| pending.flow() == flow)
+            .map(PendingAction::id);
+        let batch = vec![
+            Fact::GrantIssued {
+                grant,
+                authorization: authorization.clone(),
+                authority: authority.clone(),
+            },
+            Fact::GrantConsumed { grant, flow, action },
+            Fact::AuthorizationApplied {
+                transition,
+                authorization,
+                authority,
+                resolved,
+                derived: None,
+                labels: None,
+            },
+        ];
+        self.commit(batch);
+    }
+
+    /// Audit a denied authorization: one typed audit event and its fact, one
+    /// batch, one advance.
+    pub(crate) fn record_denied_authorization(
+        &mut self,
+        authorization: crate::remedy::Authorization,
+        authority: crate::audit::AuthorityName,
+        reason: String,
+    ) {
+        self.commit(vec![Fact::AuthorizationDenied {
+            authorization,
+            authority,
+            reason,
+        }]);
     }
 
     /// Apply a validated content-justified `Derive` step as one transaction: admit the
@@ -454,32 +633,38 @@ impl Trajectory {
         transformer: crate::value::TransformerRef,
         declared_output: ValueLabel,
         body: OpaqueValue,
+        site: ReductionSite,
     ) -> ValueId {
         let transition = self.mint_transition();
         let input = self
-            .store
-            .get(source)
+            .label(source)
             .expect("transform source validated by the engine")
-            .label()
             .clone();
-        let derived = self
-            .store
-            .admit_transformed(source, transition, transformer.clone(), declared_output.clone(), body)
-            .expect("transform source validated by the engine");
-        self.pending
-            .as_mut()
-            .expect("pending action validated by the engine")
-            .substitute_argument(source, derived);
-        self.state.record(AuditEvent::ValueTransition {
-            transition,
-            transformer,
-            source,
-            derived: Some(derived),
-            input,
-            declared_output,
-            outcome: crate::audit::TransitionOutcome::Applied,
-        });
-        self.advance();
+        let derived = self.store.next_id();
+        self.commit(vec![
+            Fact::ValueAdmitted {
+                value: derived,
+                origin: ValueOrigin::Transformed {
+                    source,
+                    transition,
+                    transformer: transformer.clone(),
+                    declared: declared_output.clone(),
+                },
+            },
+            self.substitution_fact(site, source, derived),
+            Fact::ControlPlane {
+                event: AuditEvent::ValueTransition {
+                    transition,
+                    transformer,
+                    source,
+                    derived: Some(derived),
+                    input,
+                    declared_output,
+                    outcome: crate::audit::TransitionOutcome::Applied,
+                },
+            },
+        ]);
+        self.store_body(derived, body);
         derived
     }
 
@@ -494,12 +679,10 @@ impl Trajectory {
     ) {
         let transition = self.mint_transition();
         let input = self
-            .store
-            .get(source)
+            .label(source)
             .expect("transform source validated by the engine")
-            .label()
             .clone();
-        self.state.record(AuditEvent::ValueTransition {
+        let event = AuditEvent::ValueTransition {
             transition,
             transformer,
             source,
@@ -507,22 +690,32 @@ impl Trajectory {
             input,
             declared_output,
             outcome: crate::audit::TransitionOutcome::Failed(failure),
-        });
-        self.advance();
+        };
+        self.commit(vec![Fact::ControlPlane { event }]);
     }
 
     /// Apply a validated `ConstrainAction` step as one transaction.
     pub(crate) fn apply_constraint(&mut self, to_tool: ToolName, effects: crate::dimension::Effects) {
         let transition = self.mint_transition();
-        let pending = self.pending.as_mut().expect("pending action validated by the engine");
-        let action = pending.id();
-        pending.constrain(to_tool, effects);
-        self.state.record(AuditEvent::ActionConstrained {
-            transition,
-            action,
-            outcome: crate::audit::TransitionOutcome::Applied,
-        });
-        self.advance();
+        let action = self
+            .view
+            .pending_action()
+            .expect("pending action validated by the engine")
+            .id();
+        self.commit(vec![
+            Fact::ActionConstrained {
+                action,
+                to_tool,
+                effects,
+            },
+            Fact::ControlPlane {
+                event: AuditEvent::ActionConstrained {
+                    transition,
+                    action,
+                    outcome: crate::audit::TransitionOutcome::Applied,
+                },
+            },
+        ]);
     }
 
     /// Apply a granted `AcceptGrowth` step as one transaction: record the
@@ -535,17 +728,31 @@ impl Trajectory {
         resolved: Vec<crate::contract::Violation>,
     ) {
         let transition = self.mint_transition();
-        let pending = self.pending.as_mut().expect("pending action validated by the engine");
-        let action = pending.id();
-        pending.accept_growth(effects.clone());
-        self.state.record(AuditEvent::AcceptApplied {
-            transition,
-            action,
-            effects,
-            authority,
-            resolved,
-        });
-        self.advance();
+        let action = self
+            .view
+            .pending_action()
+            .expect("pending action validated by the engine")
+            .id();
+        let acquisition = crate::remedy::Authorization::new(
+            crate::remedy::AuthorizationDelta::single(crate::remedy::DeltaCoordinate::AcquireEffects(effects.clone())),
+            crate::remedy::AuthorizationScope::PendingAction { action },
+        )
+        .expect("the engine accepts only non-empty growths");
+        self.commit(vec![
+            Fact::GrowthAccepted {
+                action,
+                effects,
+                authority: authority.clone(),
+            },
+            Fact::AuthorizationApplied {
+                transition,
+                authorization: acquisition,
+                authority,
+                resolved,
+                derived: None,
+                labels: None,
+            },
+        ]);
     }
 
     /// Apply a granted fiat `Derive` (Endorse) step as one transaction: admit a new
@@ -557,32 +764,78 @@ impl Trajectory {
         &mut self,
         source: ValueId,
         authority: crate::audit::AuthorityName,
-        delta: crate::transition::EndorseDelta,
+        delta: crate::remedy::LabelRaise,
         raised: ValueLabel,
+        site: ReductionSite,
     ) -> ValueId {
         let transition = self.mint_transition();
-        let source_value = self.store.get(source).expect("endorse source validated by the engine");
+        let source_value = self.value(source).expect("endorse source validated by the engine");
         let input = source_value.label().clone();
         let body = source_value.body().clone();
-        let derived = self
-            .store
-            .admit_endorsed(source, authority.clone(), delta.clone(), raised.clone(), body)
-            .expect("endorse source validated by the engine");
-        self.pending
-            .as_mut()
-            .expect("pending action validated by the engine")
-            .substitute_argument(source, derived);
-        self.state.record(AuditEvent::EndorseApplied {
-            transition,
-            source,
-            derived,
-            authority,
-            delta,
-            input,
-            raised,
-        });
-        self.advance();
+        let raise_grant = crate::remedy::Authorization::new(
+            crate::remedy::AuthorizationDelta::single(crate::remedy::DeltaCoordinate::RaiseLabel(delta.clone())),
+            crate::remedy::AuthorizationScope::DerivedValue { source },
+        )
+        .expect("the engine endorses only non-empty raises");
+        let derived = self.store.next_id();
+        self.commit(vec![
+            Fact::ValueAdmitted {
+                value: derived,
+                origin: ValueOrigin::Endorsed {
+                    source,
+                    authority: authority.clone(),
+                    delta,
+                },
+            },
+            self.substitution_fact(site, source, derived),
+            Fact::AuthorizationApplied {
+                transition,
+                authorization: raise_grant,
+                authority,
+                resolved: Vec::new(),
+                derived: Some(derived),
+                labels: Some(crate::audit::RaiseLabels { input, raised }),
+            },
+        ]);
+        self.store_body(derived, body);
         derived
+    }
+
+    /// The substitution fact for a derivation at `site`.
+    fn substitution_fact(&self, site: ReductionSite, from: ValueId, to: ValueId) -> Fact {
+        match site {
+            ReductionSite::Action => Fact::ArgumentSubstituted {
+                action: self
+                    .view
+                    .pending_action()
+                    .expect("pending action validated by the engine")
+                    .id(),
+                from,
+                to,
+            },
+            ReductionSite::Emission => Fact::EmissionBodySubstituted {
+                flow: self
+                    .view
+                    .pending_emission()
+                    .expect("pending emission validated by the engine")
+                    .flow(),
+                from,
+                to,
+            },
+        }
+    }
+
+    /// The id the next appended turn will carry.
+    fn next_turn_id(&self) -> TurnId {
+        TurnId::new(self.view.turns().len() as u64)
+    }
+
+    /// Store an admitted value's bytes. Called immediately after the batch
+    /// carrying its `ValueAdmitted` fact, so the store index and the log stay
+    /// in lockstep.
+    fn store_body(&mut self, value: ValueId, body: OpaqueValue) {
+        let stored = self.store.admit(body);
+        debug_assert_eq!(stored, value, "store index diverged from the admission facts");
     }
 
     pub(crate) fn mint_transition(&mut self) -> TransitionId {
@@ -595,9 +848,32 @@ impl Trajectory {
     /// trajectory's past, as a prior dispatch would have. Lets a test whose
     /// subject is the confidentiality axis exercise an egress-bearing sink
     /// without criterion (1) (surface growth) firing on the first egress.
+    ///
+    /// Recorded as an honest synthetic dispatch — proposal, commitment,
+    /// release, declared failure, one batch — so the log stays the single
+    /// source of the committed effect surface even for seeded fixtures (and
+    /// the seed advances the revision like the real dispatch it stands for).
     #[cfg(test)]
     pub(crate) fn seed_committed_effects(&mut self, effects: crate::dimension::Effects) {
-        self.state.commit_effects(effects);
+        let action = ActionId::new(self.next_action);
+        self.next_action += 1;
+        let flow = FlowId::new(self.next_flow);
+        self.next_flow += 1;
+        self.commit(vec![
+            Fact::ActionProposed {
+                action,
+                flow,
+                request: ToolRequest::new(
+                    ToolName::new("seed.dispatch"),
+                    crate::request::ArgumentTree::empty(),
+                    BTreeSet::new(),
+                ),
+                effects: effects.clone(),
+            },
+            Fact::EffectsCommitted { action, effects },
+            Fact::ActionReleased { action },
+            Fact::DispatchFailed { action },
+        ]);
     }
 
     /// Test setup: admit a derived value under `output`, attributed to `source`
@@ -610,31 +886,42 @@ impl Trajectory {
         let transition = self.mint_transition();
         let body = self
             .store
-            .get(source)
+            .body(source)
             .expect("seed_transformed source admitted")
-            .body()
             .clone();
-        let derived = self
-            .store
-            .admit_transformed(
+        let transformer = crate::value::TransformerRef {
+            id: "seed".to_owned(),
+            version: 0,
+        };
+        let derived = self.store.next_id();
+        self.commit(vec![Fact::ValueAdmitted {
+            value: derived,
+            origin: ValueOrigin::Transformed {
                 source,
                 transition,
-                crate::value::TransformerRef {
-                    id: "seed".to_owned(),
-                    version: 0,
-                },
-                output,
-                body,
-            )
-            .expect("seed_transformed source admitted");
-        self.advance();
+                transformer,
+                declared: output,
+            },
+        }]);
+        self.store_body(derived, body);
         derived
     }
 
-    /// Every public mutation advances the revision exactly once, as one
-    /// transaction.
-    fn advance(&mut self) {
-        self.revision = self.revision.next();
+    /// One mutation = one atomically appended event batch (which is the
+    /// revision advance: the revision digests the frontier), then one full
+    /// reprojection. The batch mirrors validations that already passed, so an
+    /// admission conflict here is a crate bug — it fails loudly.
+    ///
+    /// Reprojecting everything is deliberate: updating the projection
+    /// incrementally would be a second fold over the facts, and a second fold
+    /// is exactly the thing that can disagree with the first. It costs
+    /// O(dependency edges) per mutation — see [`crate::projection`] for why
+    /// that is cubic, not quadratic, on dependency-dense trajectories.
+    fn commit(&mut self, facts: Vec<Fact>) {
+        self.events
+            .append_batch(facts)
+            .expect("facts mirror an already-validated mutation");
+        self.view = TrajectoryProjection::project(&self.events);
     }
 }
 
@@ -709,8 +996,11 @@ mod tests {
             .unwrap();
         assert_eq!(trajectory.pending_confirmation(), Some(&ToolName::new("db.drop")));
 
-        // A release spends it without appending a turn; it must not resurrect.
-        trajectory.spend_confirmation();
+        // A release spends it without appending a turn (the ConfirmationSpent
+        // fact is the consumption of the confirming turn's implicit grant);
+        // it must not resurrect.
+        let newest = TurnId::new((trajectory.turns().len() - 1) as u64);
+        trajectory.commit(vec![Fact::ConfirmationSpent { turn: newest }]);
         assert_eq!(trajectory.pending_confirmation(), None);
     }
 }

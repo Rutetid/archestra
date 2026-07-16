@@ -14,7 +14,7 @@
 //!   the engine issued.
 //!
 //! A [`PendingApproval`] is opaque, linear (non-`Clone`), `Serialize`-only,
-//! and bound to the exact trajectory revision, pending action, waiver,
+//! and bound to the exact trajectory revision, pending flow, grant,
 //! targeted violations, and authority registration. Any state change —
 //! including a process restart, since nothing can deserialize one —
 //! invalidates it.
@@ -27,10 +27,12 @@ use serde::Serialize;
 use crate::audit::AuthorityName;
 use crate::contract::Violation;
 use crate::engine::EngineId;
-use crate::revision::{ActionId, PlanId, Revision, ValueId};
-use crate::transition::{AuthorityMandate, ProposedGrant};
+use crate::projection::TrajectoryProjection;
+use crate::remedy::Authorization;
+use crate::revision::{FlowId, PlanId, Revision, ValueId};
+use crate::transition::AuthorityMandate;
 use crate::turn::TrajectoryId;
-use crate::value::{Provenance, ValueLabel, ValueStore};
+use crate::value::{Provenance, ValueLabel};
 
 /// A ruling outcome, from an inline or external authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -39,29 +41,29 @@ pub enum Ruling {
     Deny { reason: String },
 }
 
-/// A deterministic inline decision function: registered policy over the grant
-/// it is asked to authorize, the violations that grant targets, and a
+/// A deterministic inline decision function: registered policy over the authorization
+/// it is asked to grant, the violations that grant targets, and a
 /// read-only view of the trajectory (labels and provenance of the values in
 /// scope). `None` abstains — routing falls through to the next competent
 /// authority, so abstention keeps the contract total.
-pub type AuthorityFn = fn(&ProposedGrant, &[Violation], &TrajectoryView<'_>) -> Option<Ruling>;
+pub type AuthorityFn = fn(&Authorization, &[Violation], &TrajectoryView<'_>) -> Option<Ruling>;
 
-/// A read-only projection of the trajectory handed to an inline authority: the
+/// A read-only slice of the trajectory handed to an inline authority: the
 /// label and provenance of any value it needs to judge a grant. Borrowed and
 /// taken before any mutation, so an inline ruling cannot observe its own
 /// effects.
 pub struct TrajectoryView<'a> {
-    store: &'a ValueStore,
+    projection: &'a TrajectoryProjection,
 }
 
 impl<'a> TrajectoryView<'a> {
-    pub(crate) fn new(store: &'a ValueStore) -> Self {
-        Self { store }
+    pub(crate) fn new(projection: &'a TrajectoryProjection) -> Self {
+        Self { projection }
     }
 
     /// The label of a value the trajectory admitted, if any.
     pub fn label(&self, value: ValueId) -> Option<&ValueLabel> {
-        self.store.get(value).ok().map(|stored| stored.label())
+        self.projection.label(value)
     }
 
     /// The transitive provenance ancestry of `value` — the value and every
@@ -71,12 +73,10 @@ impl<'a> TrajectoryView<'a> {
     /// fold does not name a suspicious ancestor in its own label; only walking
     /// the closure reveals it.
     pub fn ancestry(&self, value: ValueId) -> impl Iterator<Item = (ValueId, &ValueLabel, &Provenance)> {
-        self.store.provenance_closure([value]).into_iter().filter_map(|id| {
-            self.store
-                .get(id)
-                .ok()
-                .map(|stored| (id, stored.label(), stored.provenance()))
-        })
+        self.projection
+            .provenance_closure([value])
+            .into_iter()
+            .filter_map(|id| Some((id, self.projection.label(id)?, self.projection.provenance_of(id)?)))
     }
 }
 
@@ -107,20 +107,18 @@ impl AncestrySnapshot {
     /// Snapshot the label and provenance of the transitive provenance closure
     /// of `ids`, taken before any mutation. Unknown ids are skipped — the
     /// snapshot is context for a ruling, not a check.
-    pub(crate) fn of(store: &ValueStore, ids: impl IntoIterator<Item = ValueId>) -> Self {
-        let values = store
+    pub(crate) fn of(projection: &TrajectoryProjection, ids: impl IntoIterator<Item = ValueId>) -> Self {
+        let values = projection
             .provenance_closure(ids)
             .into_iter()
             .filter_map(|id| {
-                store.get(id).ok().map(|stored| {
-                    (
-                        id,
-                        ValueView {
-                            label: stored.label().clone(),
-                            provenance: stored.provenance().clone(),
-                        },
-                    )
-                })
+                Some((
+                    id,
+                    ValueView {
+                        label: projection.label(id)?.clone(),
+                        provenance: projection.provenance_of(id)?.clone(),
+                    },
+                ))
             })
             .collect();
         Self { values }
@@ -181,16 +179,15 @@ pub enum AuthorityMode {
     External,
 }
 
-/// A grant step awaiting an external authority's ruling. Issued by the engine
-/// when an `ApplyWaiver`, `AcceptGrowth`, or fiat `Derive` (Endorse) step names an
-/// external authority; consumed by
+/// A grant step awaiting an external authority's ruling. Issued by the
+/// engine when an `Authorize` step names an external authority; consumed by
 /// [`crate::engine::PolicyEngine::apply_approval`], which dispatches on the
-/// grant variant.
+/// granted authorization's scope.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct PendingApproval {
     plan: PlanId,
-    action: ActionId,
-    grant: ProposedGrant,
+    flow: FlowId,
+    grant: Authorization,
     authority: AuthorityName,
     /// The violations this grant targets, as predicted at issuance.
     resolved: Vec<Violation>,
@@ -204,10 +201,10 @@ pub struct PendingApproval {
 
 /// The consumed contents of a [`PendingApproval`]. The plan id stays behind
 /// on the serialized approval only — validation binds through the revision
-/// and the pending action.
+/// and the pending flow.
 pub(crate) struct ApprovalParts {
-    pub(crate) action: ActionId,
-    pub(crate) grant: ProposedGrant,
+    pub(crate) flow: FlowId,
+    pub(crate) grant: Authorization,
     pub(crate) authority: AuthorityName,
     pub(crate) resolved: Vec<Violation>,
     pub(crate) trajectory: TrajectoryId,
@@ -222,8 +219,8 @@ impl PendingApproval {
     )]
     pub(crate) fn new(
         plan: PlanId,
-        action: ActionId,
-        grant: ProposedGrant,
+        flow: FlowId,
+        grant: Authorization,
         authority: AuthorityName,
         resolved: Vec<Violation>,
         ancestry: AncestrySnapshot,
@@ -233,7 +230,7 @@ impl PendingApproval {
     ) -> Self {
         Self {
             plan,
-            action,
+            flow,
             grant,
             authority,
             resolved,
@@ -254,9 +251,8 @@ impl PendingApproval {
         &self.ancestry
     }
 
-    /// The grant the ruling would authorize (a waiver, an acknowledgment, or an
-    /// effect acquisition).
-    pub fn grant(&self) -> &ProposedGrant {
+    /// The authorization the ruling would grant: its exact delta and scope.
+    pub fn grant(&self) -> &Authorization {
         &self.grant
     }
 
@@ -267,7 +263,7 @@ impl PendingApproval {
 
     pub(crate) fn into_parts(self) -> ApprovalParts {
         ApprovalParts {
-            action: self.action,
+            flow: self.flow,
             grant: self.grant,
             authority: self.authority,
             resolved: self.resolved,
@@ -315,7 +311,7 @@ mod tests {
         let mid = trajectory.seed_transformed(root, ValueLabel::identity());
         let leaf = trajectory.seed_transformed(mid, ValueLabel::identity());
 
-        let snapshot = AncestrySnapshot::of(trajectory.store(), [leaf]);
+        let snapshot = AncestrySnapshot::of(trajectory.view(), [leaf]);
 
         let ids: BTreeSet<ValueId> = snapshot.iter().map(|(id, _)| id).collect();
         assert_eq!(ids, BTreeSet::from([root, mid, leaf]));
@@ -335,7 +331,7 @@ mod tests {
             )
             .unwrap();
 
-        let snapshot = AncestrySnapshot::of(trajectory.store(), [joined]);
+        let snapshot = AncestrySnapshot::of(trajectory.view(), [joined]);
 
         assert_eq!(snapshot.iter().filter(|(id, _)| *id == root).count(), 1);
         assert_eq!(snapshot.iter().count(), 4);
@@ -347,7 +343,7 @@ mod tests {
         let known = ingress(&mut trajectory, ValueLabel::identity(), "hi");
         let missing = ValueId::new(u64::MAX);
 
-        let snapshot = AncestrySnapshot::of(trajectory.store(), [known, missing]);
+        let snapshot = AncestrySnapshot::of(trajectory.view(), [known, missing]);
 
         assert!(snapshot.get(known).is_some());
         assert_eq!(snapshot.get(missing), None);
@@ -359,9 +355,9 @@ mod tests {
         let mut trajectory = Trajectory::new();
         let value = ingress(&mut trajectory, suspicious_for("bob"), "secret");
 
-        let snapshot = AncestrySnapshot::of(trajectory.store(), [value]);
+        let snapshot = AncestrySnapshot::of(trajectory.view(), [value]);
         let view = snapshot.get(value).unwrap();
-        let stored = trajectory.store().get(value).unwrap();
+        let stored = trajectory.value(value).unwrap();
 
         assert_eq!(&view.label, stored.label());
         assert_eq!(&view.provenance, stored.provenance());

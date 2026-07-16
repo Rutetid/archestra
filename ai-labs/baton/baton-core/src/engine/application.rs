@@ -4,18 +4,22 @@ use tracing::debug;
 
 use crate::approval::{AncestrySnapshot, AuthorityMode, PendingApproval, Ruling, TrajectoryView};
 use crate::audit::{AuditEvent, AuthorityName};
-use crate::contract::{Fixability, Violation};
+use crate::contract::Violation;
 use crate::dimension::Effects;
-use crate::plan::{Justification, TransitionKind};
+use crate::remedy::{
+    Authorization, AuthorizationScope, DeltaCoordinate, LabelRaise, Lift, PlannedRemedy, ReductionTarget,
+};
 use crate::request::ToolRequest;
-use crate::revision::{ActionId, PlanId, ValueId};
-use crate::transition::{ActionTransition, ProposedGrant, TransientWaiver};
-use crate::turn::Trajectory;
+use crate::revision::{FlowId, PlanId, ValueId};
+use crate::transition::ActionTransition;
+use crate::turn::{ReductionSite, Trajectory};
 use crate::value::ValueLabel;
 
 use super::PolicyEngine;
-use super::capability::{BlockReason, Decision, StepCapability, StepOutcome, StepRefused, ToolContract};
-use super::planning::{SimFlow, grant_for};
+use super::capability::{
+    BlockReason, Emitted, FlowOutcome, FlowPermit, StepCapability, StepOutcome, StepRefused, ToolContract,
+};
+use super::planning::SimFlow;
 
 /// The result of routing a grant through the competent authorities: the first
 /// resolving inline ruling, a deferral to an external authority, or no ruling
@@ -36,7 +40,25 @@ enum RoutedStep {
         resolved: Vec<Violation>,
     },
     NeedsApproval(PendingApproval),
-    Terminal(Decision),
+    Terminal(FlowOutcome<FlowPermit>),
+}
+
+/// Which pending flow a stored plan targets. Plans bind a [`FlowId`]; the
+/// two pending slots (tool action, emission) are independent, so the flow
+/// resolves to exactly one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlowKind {
+    Action,
+    Emission,
+}
+
+impl FlowKind {
+    fn site(self) -> ReductionSite {
+        match self {
+            Self::Action => ReductionSite::Action,
+            Self::Emission => ReductionSite::Emission,
+        }
+    }
 }
 
 /// The stored plan `plan` names, or the refusal.
@@ -48,24 +70,47 @@ fn stored_plan(trajectory: &Trajectory, plan: PlanId) -> Result<&crate::plan::Re
         .ok_or(StepRefused::UnknownPlan { plan })
 }
 
-/// The pending action iff it is exactly `action`, or the refusal.
-fn pending_action_is(trajectory: &Trajectory, action: ActionId) -> Result<&crate::request::PendingAction, StepRefused> {
-    match trajectory.pending_action() {
-        Some(pending) if pending.id() == action => Ok(pending),
-        _ => Err(StepRefused::ActionNotPending { action }),
+/// Which pending slot targets the checked flow `flow`, or the refusal.
+fn pending_flow_kind(trajectory: &Trajectory, flow: FlowId) -> Result<FlowKind, StepRefused> {
+    match (trajectory.pending_action(), trajectory.pending_emission()) {
+        (Some(pending), _) if pending.flow() == flow => Ok(FlowKind::Action),
+        (_, Some(pending)) if pending.flow() == flow => Ok(FlowKind::Emission),
+        _ => Err(StepRefused::FlowNotPending { flow }),
     }
 }
 
-/// The per-grant-kind denial attribution, shared by inline routing and the
-/// external approval path.
-fn denial_event(grant: &ProposedGrant, authority: AuthorityName, reason: String) -> AuditEvent {
-    match grant {
-        ProposedGrant::Accept { .. } => AuditEvent::AcceptDenied { authority, reason },
-        ProposedGrant::Endorse { .. } => AuditEvent::EndorseDenied { authority, reason },
-        ProposedGrant::Waive { .. } | ProposedGrant::Acknowledge { .. } => {
-            AuditEvent::WaiverDenied { authority, reason }
+/// The check-transient lift an authorization applies, reconstructed from its
+/// atomic coordinates (the acknowledge coordinate contributes no lift — its
+/// facts are cleared by the recheck's presence-of-a-lift rule).
+fn lift_of(ask: &Authorization) -> Lift {
+    let mut lift = Lift::empty();
+    for coordinate in ask.delta().coordinates() {
+        match coordinate {
+            DeltaCoordinate::ExceptPriorEffects(effects) => lift.prior_effects = Some(effects.clone()),
+            DeltaCoordinate::StandInConfirmation => lift.confirms = true,
+            DeltaCoordinate::ReleaseControl(deps) => lift.control_release = deps.clone(),
+            DeltaCoordinate::RaiseLabel(_)
+            | DeltaCoordinate::AcquireEffects(_)
+            | DeltaCoordinate::AcknowledgeUnknown(_) => {}
         }
     }
+    lift
+}
+
+/// The durable raise an authorization mints, if it carries one.
+fn raise_of(ask: &Authorization) -> Option<LabelRaise> {
+    ask.delta().coordinates().find_map(|coordinate| match coordinate {
+        DeltaCoordinate::RaiseLabel(raise) => Some(raise.clone()),
+        _ => None,
+    })
+}
+
+/// The surface growth an authorization acquires, if it carries one.
+fn acquisition_of(ask: &Authorization) -> Option<Effects> {
+    ask.delta().coordinates().find_map(|coordinate| match coordinate {
+        DeltaCoordinate::AcquireEffects(effects) => Some(effects.clone()),
+        _ => None,
+    })
 }
 
 impl PolicyEngine {
@@ -87,22 +132,29 @@ impl PolicyEngine {
             });
         }
         stored.steps.get(step).ok_or(StepRefused::NoSuchStep { plan, step })?;
-        pending_action_is(trajectory, stored.action)?;
+        // Only the head step is executable: the remainder of a plan is
+        // predictive and is replaced by the recheck after each applied
+        // remedy, so applying it out of order would route authorities on
+        // targets the earlier steps were supposed to remove.
+        if step != 0 {
+            return Err(StepRefused::NotNextStep { step });
+        }
+        pending_flow_kind(trajectory, stored.flow)?;
         Ok(StepCapability {
             plan,
             step,
-            action: stored.action,
+            flow: stored.flow,
             trajectory: trajectory.id(),
             revision: trajectory.revision(),
             engine: self.id,
         })
     }
 
-    /// Consume a step capability and apply its transition. Binding failures
+    /// Consume a step capability and apply its remedy. Binding failures
     /// (foreign trajectory, stale revision) refuse without touching state;
-    /// transition failures are audited and advance the revision, staling
+    /// reduction failures are audited and advance the revision, staling
     /// every sibling capability and plan. On success the original flow is
-    /// re-evaluated — permitting, re-planning with fresh predictions, or
+    /// re-evaluated — allowing, re-planning with fresh predictions, or
     /// blocking terminally.
     #[tracing::instrument(level = "debug", skip_all, fields(plan = %capability.plan, step = capability.step))]
     pub fn apply_step(
@@ -129,7 +181,7 @@ impl PolicyEngine {
             });
         }
         let stored = stored_plan(trajectory, capability.plan)?;
-        let spec = stored
+        let step = stored
             .steps
             .get(capability.step)
             .ok_or(StepRefused::NoSuchStep {
@@ -137,57 +189,22 @@ impl PolicyEngine {
                 step: capability.step,
             })?
             .clone();
-        let pending = pending_action_is(trajectory, capability.action)?;
-        let checked = pending.current().clone();
-        let original = pending.original().clone();
-        let contract = self.contracts.get(&checked.tool);
-        let sim = SimFlow::of(trajectory, &checked, contract).expect("pending action dependencies stay admitted");
-
-        // The step's declared precondition must be exactly what the flow
-        // reports now.
-        if sim.violations(None) != spec.precondition.remaining {
-            debug!("step refused (precondition posture no longer holds)");
-            trajectory.record_event(AuditEvent::StepFailed {
-                plan: capability.plan,
-                step: capability.step as u64,
-                failure: crate::audit::TransitionFailure::PreconditionMismatch,
-            });
-            return Ok(StepOutcome::Failed(
-                crate::audit::TransitionFailure::PreconditionMismatch,
-            ));
+        if capability.step != 0 {
+            return Err(StepRefused::NotNextStep { step: capability.step });
         }
+        let kind = pending_flow_kind(trajectory, capability.flow)?;
 
-        match spec.kind.clone() {
-            TransitionKind::Derive {
-                source,
-                justification: Justification::Content(transformer),
-            } => {
+        match step {
+            PlannedRemedy::Reduce(ReductionTarget::DeriveValue { source, transformer }) => {
                 let registered = self
                     .transformers
                     .iter()
                     .find(|t| t.descriptor.transformer == transformer)
                     .expect("plans reference only registered transformers");
-                let source_value = trajectory
-                    .store()
-                    .get(source)
-                    .expect("plans reference only admitted values");
-                if let Err(failure) = registered.accepts(source_value) {
-                    trajectory.fail_transform(
-                        source,
-                        registered.descriptor.transformer.clone(),
-                        registered.descriptor.output.clone(),
-                        failure.clone(),
-                    );
-                    return Ok(StepOutcome::Failed(failure));
-                }
-                // Validate the declared postcondition BEFORE mutating:
-                // labels are deterministic, so simulating the swap is exactly
-                // the state the transform would produce. A failed transition
-                // must create no value and no substitution.
-                let mut after = sim.clone();
-                after.leaf_labels.insert(source, registered.descriptor.output.clone());
-                if after.violations(None) != spec.postcondition.remaining {
-                    let failure = crate::audit::TransitionFailure::PostconditionMismatch;
+                let source_value = trajectory.value(source).expect("plans reference only admitted values");
+                // The registered reduction relation, rechecked live: a failed
+                // relation creates no value and no substitution.
+                if let Err(failure) = registered.accepts(&source_value) {
                     trajectory.fail_transform(
                         source,
                         registered.descriptor.transformer.clone(),
@@ -214,106 +231,138 @@ impl PolicyEngine {
                     registered.descriptor.transformer.clone(),
                     registered.descriptor.output.clone(),
                     body,
+                    kind.site(),
                 );
-                Ok(StepOutcome::Advanced(self.evaluate(trajectory, original)))
+                // The fail-closed recheck is an execution invariant, not a
+                // plan step: re-evaluating the original flow allows,
+                // re-plans with fresh predictions, or blocks.
+                Ok(StepOutcome::Advanced(self.recheck(trajectory, kind)))
             }
-            TransitionKind::ConstrainAction { transition } => {
+            PlannedRemedy::Reduce(ReductionTarget::NarrowAction { transition }) => {
+                debug_assert_eq!(kind, FlowKind::Action, "narrowing is enumerated only for tool flows");
                 let registered = self
                     .action_transitions
                     .iter()
                     .find(|t| t.id == transition)
                     .expect("plans reference only registered action transitions");
-                let pending = trajectory.pending_action().expect("validated above");
-                let fail = |trajectory: &mut Trajectory, failure: crate::audit::TransitionFailure| {
-                    trajectory.record_event(AuditEvent::StepFailed {
-                        plan: capability.plan,
-                        step: capability.step as u64,
-                        failure: failure.clone(),
-                    });
-                    Ok(StepOutcome::Failed(failure))
-                };
+                let pending = trajectory
+                    .pending_action()
+                    .expect("a tool flow's pending action was resolved above");
+                let checked = pending.current().clone();
+                let recipients = SimFlow::of(trajectory, &checked, self.contracts.get(&checked.tool))
+                    .expect("pending action dependencies stay admitted")
+                    .recipients;
                 // The same structural gate the planner filtered candidates
                 // with, rechecked live against the current registries.
-                let (target, recipients) =
-                    match self.constrain_gate(registered, pending, &checked, trajectory.store(), &sim.recipients) {
-                        Ok(gate) => gate,
-                        Err(failure) => return fail(trajectory, failure),
-                    };
-                // Pre-mutation postcondition validation, mirroring the
-                // planner's simulation exactly.
-                let mut after = sim.clone();
-                after.tool = registered.to_tool.clone();
-                after.adopt_requires(&target.requires);
-                after.recipients = recipients;
-                // Mirror the planner: the constrain narrows the proposed effects,
-                // so the postcondition recheck must see the reduced surface too
-                // (else a surface-growth soft-ban would spuriously persist).
-                after.proposed_effects = registered.effects.clone();
-                if after.violations(None) != spec.postcondition.remaining {
-                    return fail(trajectory, crate::audit::TransitionFailure::PostconditionMismatch);
+                // The target tool's requirements — including an unstated one,
+                // which the recheck escalates as `RequirementsUnknown` — are
+                // adopted by the re-evaluation below, not mirrored here: the
+                // postcondition simulation this replaced could only predict
+                // what the mandatory recheck now re-derives from the contract.
+                match self.constrain_gate(registered, pending, &checked, trajectory.store(), &recipients) {
+                    Ok(_) => {}
+                    Err(failure) => {
+                        trajectory.record_event(AuditEvent::StepFailed {
+                            plan: capability.plan,
+                            step: capability.step as u64,
+                            failure: failure.clone(),
+                        });
+                        return Ok(StepOutcome::Failed(failure));
+                    }
                 }
                 trajectory.apply_constraint(registered.to_tool.clone(), registered.effects.clone());
-                Ok(StepOutcome::Advanced(self.evaluate(trajectory, original)))
+                Ok(StepOutcome::Advanced(self.recheck(trajectory, kind)))
             }
-            TransitionKind::ApplyWaiver { delta } => {
-                let grant = grant_for(&delta, &spec.precondition.remaining);
-                Ok(
-                    match self.route_step_grant(trajectory, &capability, &checked, grant, spec.precondition.remaining) {
-                        RoutedStep::Approved { authority, resolved } => StepOutcome::Advanced(self.waiver_permit(
-                            trajectory,
-                            capability.action,
-                            delta,
-                            authority,
-                            resolved,
-                        )),
-                        RoutedStep::NeedsApproval(pending) => StepOutcome::NeedsApproval(pending),
-                        RoutedStep::Terminal(decision) => StepOutcome::Advanced(decision),
-                    },
-                )
-            }
-            TransitionKind::AcceptGrowth { effects } => {
-                let grant = ProposedGrant::Accept {
-                    effects: effects.clone(),
-                };
-                Ok(
-                    match self.route_step_grant(trajectory, &capability, &checked, grant, spec.precondition.remaining) {
-                        RoutedStep::Approved { authority, resolved } => StepOutcome::Advanced(
-                            self.accept_permit(trajectory, effects, authority, resolved, original),
-                        ),
-                        RoutedStep::NeedsApproval(pending) => StepOutcome::NeedsApproval(pending),
-                        RoutedStep::Terminal(decision) => StepOutcome::Advanced(decision),
-                    },
-                )
-            }
-            TransitionKind::Derive {
-                source,
-                justification: Justification::Fiat { delta, targets },
+            PlannedRemedy::Authorize {
+                authorization, targets, ..
             } => {
-                let grant = ProposedGrant::Endorse {
-                    source,
-                    delta: delta.clone(),
-                };
-                // The authority rules on the step's declared targets, not the
-                // actual posture: for an ordinary step they coincide, but a
-                // terminal-rescue endorse targets the projected post-release
-                // residual a masking control hides from the actual vector.
+                // The authority rules on the step's declared targets: for an
+                // ordinary step the residual at its peel, for a terminal-
+                // rescue raise the projected post-release residual a masking
+                // control dependency hides from the actual vector.
                 Ok(
-                    match self.route_step_grant(trajectory, &capability, &checked, grant, targets) {
-                        RoutedStep::Approved { authority, .. } => {
-                            StepOutcome::Advanced(self.endorse_permit(trajectory, source, delta, authority, original))
-                        }
+                    match self.route_step_grant(trajectory, &capability, kind, authorization.clone(), targets) {
+                        RoutedStep::Approved { authority, resolved } => match &authorization.scope() {
+                            AuthorizationScope::DerivedValue { source } => {
+                                let raise =
+                                    raise_of(&authorization).expect("a derived-value authorization carries a raise");
+                                StepOutcome::Advanced(self.endorse_permit(trajectory, *source, raise, authority, kind))
+                            }
+                            AuthorizationScope::PendingAction { .. } => {
+                                debug_assert_eq!(
+                                    kind,
+                                    FlowKind::Action,
+                                    "acquisition is enumerated only for tool flows"
+                                );
+                                let effects = acquisition_of(&authorization)
+                                    .expect("an action-scoped authorization carries an acquisition");
+                                StepOutcome::Advanced(self.accept_permit(trajectory, effects, authority, resolved))
+                            }
+                            AuthorizationScope::PolicyCheck { .. } => StepOutcome::Advanced(self.lift_permit(
+                                trajectory,
+                                kind,
+                                lift_of(&authorization),
+                                authorization.clone(),
+                                authority,
+                                resolved,
+                            )),
+                        },
                         RoutedStep::NeedsApproval(pending) => StepOutcome::NeedsApproval(pending),
-                        RoutedStep::Terminal(decision) => StepOutcome::Advanced(decision),
+                        RoutedStep::Terminal(outcome) => StepOutcome::Advanced(outcome),
                     },
                 )
             }
         }
     }
 
+    /// The fail-closed recheck after an applied remedy: re-evaluate the
+    /// pending flow's immutable original. Re-entry of the flow whose remedy
+    /// just applied is structurally never a refusal (the pending slot holds
+    /// this very flow and its dependencies stay admitted).
+    fn recheck(&self, trajectory: &mut Trajectory, kind: FlowKind) -> FlowOutcome<FlowPermit> {
+        match kind {
+            FlowKind::Action => {
+                let original = trajectory
+                    .pending_action()
+                    .expect("the applied remedy's action stays pending")
+                    .original()
+                    .clone();
+                self.evaluate(trajectory, original)
+                    .expect("re-entry of the pending action is never a refusal")
+                    .map_allowed(FlowPermit::Execute)
+            }
+            FlowKind::Emission => {
+                let original = trajectory
+                    .pending_emission()
+                    .expect("the applied remedy's emission stays pending")
+                    .original()
+                    .clone();
+                self.evaluate_emission(trajectory, original)
+                    .expect("re-entry of the pending emission is never a refusal")
+                    .map_allowed(FlowPermit::Emit)
+            }
+        }
+    }
+
+    /// The kind-matched terminal: a terminal policy block clears exactly the
+    /// blocked flow's pending slot.
+    fn terminal_for(
+        &self,
+        trajectory: &mut Trajectory,
+        kind: FlowKind,
+        violations: Vec<Violation>,
+        reason: BlockReason,
+    ) -> FlowOutcome<FlowPermit> {
+        match kind {
+            FlowKind::Action => self.terminal(trajectory, violations, reason),
+            FlowKind::Emission => self.terminal_emission(trajectory, violations, reason),
+        }
+    }
+
     /// The routing shell every grant-bearing step shares. Consults the
     /// competent authorities through a read-only view taken (and dropped)
     /// before any mutation, so an inline ruling cannot observe its own
-    /// effects; a denial is audited under its grant kind and blocks
+    /// effects; a denial is audited under its typed authorization and blocks
     /// terminally; an external deferral audits `ApprovalRequested` *first*
     /// and only then mints the approval, so the approval is bound to the
     /// post-audit revision (`record_event` advances it — the order is
@@ -322,20 +371,21 @@ impl PolicyEngine {
         &self,
         trajectory: &mut Trajectory,
         capability: &StepCapability,
-        checked: &ToolRequest,
-        grant: ProposedGrant,
+        kind: FlowKind,
+        grant: Authorization,
         resolved: Vec<Violation>,
     ) -> RoutedStep {
         let routed = {
-            let view = TrajectoryView::new(trajectory.store());
+            let view = TrajectoryView::new(trajectory.view());
             self.route_grant(&grant, &resolved, &view)
         };
         match routed {
             RoutedRuling::Approved(authority) => RoutedStep::Approved { authority, resolved },
             RoutedRuling::Denied { authority, reason } => {
-                trajectory.record_event(denial_event(&grant, authority.clone(), reason.clone()));
-                RoutedStep::Terminal(self.terminal(
+                trajectory.record_denied_authorization(grant.clone(), authority.clone(), reason.clone());
+                RoutedStep::Terminal(self.terminal_for(
                     trajectory,
+                    kind,
                     resolved,
                     BlockReason::DeniedByAuthority { authority, reason },
                 ))
@@ -346,15 +396,11 @@ impl PolicyEngine {
                     authority: authority.clone(),
                     resolved: resolved.clone(),
                 });
-                let basis = checked
-                    .arguments
-                    .leaves()
-                    .into_iter()
-                    .chain(checked.control.iter().copied());
-                let ancestry = AncestrySnapshot::of(trajectory.store(), basis);
+                let basis = self.flow_basis(trajectory, kind);
+                let ancestry = AncestrySnapshot::of(trajectory.view(), basis);
                 RoutedStep::NeedsApproval(PendingApproval::new(
                     capability.plan,
-                    capability.action,
+                    capability.flow,
                     grant,
                     authority,
                     resolved,
@@ -365,7 +411,38 @@ impl PolicyEngine {
                 ))
             }
             RoutedRuling::NoRuling => {
-                RoutedStep::Terminal(self.terminal(trajectory, resolved, BlockReason::NoAuthorityRuled))
+                RoutedStep::Terminal(self.terminal_for(trajectory, kind, resolved, BlockReason::NoAuthorityRuled))
+            }
+        }
+    }
+
+    /// The value ids an approval's ancestry snapshot walks: the pending
+    /// flow's argument (or body) leaves plus its control dependencies.
+    fn flow_basis(&self, trajectory: &Trajectory, kind: FlowKind) -> Vec<ValueId> {
+        match kind {
+            FlowKind::Action => {
+                let checked = trajectory
+                    .pending_action()
+                    .expect("a tool flow's pending action was resolved by the caller")
+                    .current();
+                checked
+                    .arguments
+                    .leaves()
+                    .into_iter()
+                    .chain(checked.control.iter().copied())
+                    .collect()
+            }
+            FlowKind::Emission => {
+                let checked = trajectory
+                    .pending_emission()
+                    .expect("an emission flow's pending emission was resolved by the caller")
+                    .current();
+                checked
+                    .body
+                    .leaves()
+                    .into_iter()
+                    .chain(checked.control.iter().copied())
+                    .collect()
             }
         }
     }
@@ -378,7 +455,7 @@ impl PolicyEngine {
     /// one abstained.
     pub(super) fn route_grant(
         &self,
-        grant: &ProposedGrant,
+        grant: &Authorization,
         resolved: &[Violation],
         view: &TrajectoryView,
     ) -> RoutedRuling {
@@ -402,14 +479,14 @@ impl PolicyEngine {
 
     /// Consume a pending approval with the authority's ruling. Binding
     /// failures refuse without touching state. A denial is audited and
-    /// blocks terminally; an approval rechecks the flow fail-closed under
-    /// the waiver and mints the execution token.
+    /// blocks terminally; an approval advances the granted authorization's
+    /// state machine and rechecks the flow fail-closed.
     pub fn apply_approval(
         &self,
         trajectory: &mut Trajectory,
         pending: PendingApproval,
         ruling: Ruling,
-    ) -> Result<Decision, StepRefused> {
+    ) -> Result<FlowOutcome<FlowPermit>, StepRefused> {
         let parts = pending.into_parts();
         if parts.engine != self.id {
             return Err(StepRefused::ForeignEngine {
@@ -429,42 +506,32 @@ impl PolicyEngine {
                 current: trajectory.revision(),
             });
         }
-        pending_action_is(trajectory, parts.action)?;
+        let kind = pending_flow_kind(trajectory, parts.flow)?;
         match ruling {
-            // Dispatch on the grant: a waiver (or acknowledgment) rechecks and
-            // permits; an accept records the growth marker and re-evaluates.
-            Ruling::Approve { .. } => match parts.grant {
-                ProposedGrant::Endorse { source, delta } => {
-                    let original = trajectory
-                        .pending_action()
-                        .expect("validated pending above")
-                        .original()
-                        .clone();
-                    Ok(self.endorse_permit(trajectory, source, delta, parts.authority, original))
+            // Dispatch on the authorization's scope: a durable raise mints the
+            // endorsed value; an action-scoped acquisition records the growth
+            // marker and re-evaluates; a check-scoped lift (or acknowledgment)
+            // rechecks and permits.
+            Ruling::Approve { .. } => match &parts.grant.scope() {
+                AuthorizationScope::DerivedValue { source } => {
+                    let raise = raise_of(&parts.grant).expect("a derived-value grant carries a raise");
+                    Ok(self.endorse_permit(trajectory, *source, raise, parts.authority, kind))
                 }
-                ProposedGrant::Waive { waiver, .. } => {
-                    Ok(self.waiver_permit(trajectory, parts.action, waiver, parts.authority, parts.resolved))
+                AuthorizationScope::PendingAction { .. } => {
+                    debug_assert_eq!(kind, FlowKind::Action, "acquisition is enumerated only for tool flows");
+                    let effects = acquisition_of(&parts.grant).expect("an action-scoped grant carries an acquisition");
+                    Ok(self.accept_permit(trajectory, effects, parts.authority, parts.resolved))
                 }
-                ProposedGrant::Acknowledge { .. } => Ok(self.waiver_permit(
-                    trajectory,
-                    parts.action,
-                    TransientWaiver::empty(),
-                    parts.authority,
-                    parts.resolved,
-                )),
-                ProposedGrant::Accept { effects } => {
-                    let original = trajectory
-                        .pending_action()
-                        .expect("validated pending above")
-                        .original()
-                        .clone();
-                    Ok(self.accept_permit(trajectory, effects, parts.authority, parts.resolved, original))
+                AuthorizationScope::PolicyCheck { .. } => {
+                    let lift = lift_of(&parts.grant);
+                    Ok(self.lift_permit(trajectory, kind, lift, parts.grant, parts.authority, parts.resolved))
                 }
             },
             Ruling::Deny { reason } => {
-                trajectory.record_event(denial_event(&parts.grant, parts.authority.clone(), reason.clone()));
-                Ok(self.terminal(
+                trajectory.record_denied_authorization(parts.grant.clone(), parts.authority.clone(), reason.clone());
+                Ok(self.terminal_for(
                     trajectory,
+                    kind,
                     parts.resolved,
                     BlockReason::DeniedByAuthority {
                         authority: parts.authority,
@@ -475,53 +542,70 @@ impl PolicyEngine {
         }
     }
 
-    /// A granted waiver: recheck the flow fail-closed under the delta, audit
-    /// the application, and mint the execution token.
-    fn waiver_permit(
+    /// A granted check-scoped authorization: recheck the flow fail-closed
+    /// under its lift, audit the application, and carry the flow out — mint
+    /// the execution token for a tool flow, emit atomically for an emission
+    /// flow. The lift is check-transient, so the carried-out check *is* the
+    /// one the lift covered (a full re-evaluation would lose it).
+    fn lift_permit(
         &self,
         trajectory: &mut Trajectory,
-        action: ActionId,
-        delta: TransientWaiver,
+        kind: FlowKind,
+        delta: Lift,
+        authorization: Authorization,
         authority: AuthorityName,
         resolved: Vec<Violation>,
-    ) -> Decision {
-        let pending = trajectory
-            .pending_action()
-            .expect("caller validated the pending action");
-        let checked = pending.current().clone();
-        let original = pending.original().clone();
-        // The pending action's proposed effects are the single source of truth
-        // for what release commits — never re-derive them from the contract
-        // (a constrain or an Accept→Waive sequence would be silently undone).
-        let proposed_effects = pending.proposed_effects().clone();
-        let contract = self.contracts.get(&checked.tool);
-        let sim = SimFlow::of(trajectory, &checked, contract).expect("pending action dependencies stay admitted");
-        let remaining = sim.violations(Some(&delta));
-        if !remaining.is_empty() {
-            debug!("waiver did not clear its targeted checks, failing closed");
-            return self.terminal(trajectory, remaining, BlockReason::PostconditionFailed);
+    ) -> FlowOutcome<FlowPermit> {
+        match kind {
+            FlowKind::Action => {
+                let pending = trajectory
+                    .pending_action()
+                    .expect("a tool flow's pending action was resolved by the caller");
+                let action = pending.id();
+                let checked = pending.current().clone();
+                let original = pending.original().clone();
+                // The pending action's proposed effects are the single source of truth
+                // for what release commits — never re-derive them from the contract
+                // (a constrain or an Accept→Waive sequence would be silently undone).
+                let proposed_effects = pending.proposed_effects().clone();
+                let contract = self.contracts.get(&checked.tool);
+                let sim =
+                    SimFlow::of(trajectory, &checked, contract).expect("pending action dependencies stay admitted");
+                let remaining = sim.violations(Some(&delta));
+                if !remaining.is_empty() {
+                    debug!("lift did not clear its targeted checks, failing closed");
+                    return self.terminal(trajectory, remaining, BlockReason::PostconditionFailed);
+                }
+                let transition = trajectory.mint_transition();
+                trajectory.record_applied_authorization(transition, authorization, authority, resolved);
+                let intrinsic = match contract {
+                    Some(c) => c.output_label.clone(),
+                    None => ValueLabel::unknown(),
+                };
+                self.permit(trajectory, Some(action), original, checked, intrinsic, proposed_effects)
+                    .map_allowed(FlowPermit::Execute)
+            }
+            FlowKind::Emission => {
+                let checked = trajectory
+                    .pending_emission()
+                    .expect("an emission flow's pending emission was resolved by the caller")
+                    .current()
+                    .clone();
+                let sim = SimFlow::of_emission(trajectory, &checked, self.response_policy.as_ref())
+                    .expect("pending emission dependencies stay admitted");
+                let remaining = sim.violations(Some(&delta));
+                if !remaining.is_empty() {
+                    debug!("lift did not clear its targeted checks, failing closed");
+                    return self.terminal_emission(trajectory, remaining, BlockReason::PostconditionFailed);
+                }
+                let transition = trajectory.mint_transition();
+                trajectory.record_applied_authorization(transition, authorization, authority, resolved);
+                let (value, rendered) = trajectory
+                    .emit_response(&checked.body, checked.control)
+                    .expect("pending emission dependencies stay admitted");
+                FlowOutcome::AllowedNow(FlowPermit::Emit(Emitted { value, rendered }))
+            }
         }
-        // If the delta also cleared acknowledge-only facts (unprovable
-        // effects, a missing contract) that were in the residual, the audit
-        // `changes` must show the acknowledgment alongside the loosened
-        // dimensions — an auditor reading `changes` should not have to infer
-        // it from `resolved`.
-        let mut changes = delta.kinds();
-        if resolved.iter().any(|v| v.fixability() == Fixability::AcknowledgeOnly) {
-            changes.insert(crate::audit::WaiverKind::Acknowledgment);
-        }
-        let transition = trajectory.mint_transition();
-        trajectory.record_event(AuditEvent::WaiverApplied {
-            transition,
-            changes,
-            authority,
-            resolved,
-        });
-        let intrinsic = match contract {
-            Some(c) => c.output_label.clone(),
-            None => ValueLabel::unknown(),
-        };
-        self.permit(trajectory, Some(action), original, checked, intrinsic, proposed_effects)
     }
 
     /// A granted acceptance: record the authorized growth on the pending action
@@ -536,8 +620,7 @@ impl PolicyEngine {
         effects: Effects,
         authority: AuthorityName,
         resolved: Vec<Violation>,
-        original: ToolRequest,
-    ) -> Decision {
+    ) -> FlowOutcome<FlowPermit> {
         let pending = trajectory
             .pending_action()
             .expect("caller validated the pending action");
@@ -561,7 +644,7 @@ impl PolicyEngine {
             .filter(|v| matches!(v, Violation::Breach(crate::contract::Breach::SurfaceGrowth { .. })))
             .collect();
         trajectory.accept_growth(effects, authority, acquired);
-        self.evaluate(trajectory, original)
+        self.recheck(trajectory, FlowKind::Action)
     }
 
     /// A granted endorsement: mint the durable relabel of `source` — its bytes
@@ -569,26 +652,22 @@ impl PolicyEngine {
     /// re-evaluate. The raise is monotone (`raised_to`/`admitting` only lift a
     /// label), so the re-evaluation is the fail-closed recheck: a residual on
     /// another leaf (a multi-source breach) routes the next step, and an
-    /// under-covered flow is never permitted. Each endorse raises a distinct arg
+    /// under-covered flow is never permitted. Each endorse raises a distinct
     /// leaf to a passing label, so the re-entry terminates.
     fn endorse_permit(
         &self,
         trajectory: &mut Trajectory,
         source: ValueId,
-        delta: crate::transition::EndorseDelta,
+        delta: LabelRaise,
         authority: AuthorityName,
-        original: ToolRequest,
-    ) -> Decision {
+        kind: FlowKind,
+    ) -> FlowOutcome<FlowPermit> {
         let raised = {
-            let source_label = trajectory
-                .store()
-                .get(source)
-                .expect("plans reference only admitted values")
-                .label();
+            let source_label = trajectory.label(source).expect("plans reference only admitted values");
             delta.raise(source_label)
         };
-        trajectory.endorse_value(source, authority, delta, raised);
-        self.evaluate(trajectory, original)
+        trajectory.endorse_value(source, authority, delta, raised, kind.site());
+        self.recheck(trajectory, kind)
     }
 
     /// The structural gate a constrain must pass, identical at planning and
@@ -605,16 +684,16 @@ impl PolicyEngine {
     ) -> Result<(&'a ToolContract, BTreeSet<crate::dimension::UserId>), crate::audit::TransitionFailure> {
         transition.narrows(pending)?;
         let Some(target) = self.contracts.get(&transition.to_tool) else {
-            return Err(crate::audit::TransitionFailure::PreconditionMismatch);
+            return Err(crate::audit::TransitionFailure::ReductionRefused);
         };
         if target.effects != transition.effects {
-            return Err(crate::audit::TransitionFailure::PreconditionMismatch);
+            return Err(crate::audit::TransitionFailure::ReductionRefused);
         }
         let Ok(recipients) = target.arguments.resolve_recipients(&checked.arguments, store) else {
-            return Err(crate::audit::TransitionFailure::PreconditionMismatch);
+            return Err(crate::audit::TransitionFailure::ReductionRefused);
         };
         if !recipients.is_subset(base_recipients) {
-            return Err(crate::audit::TransitionFailure::PreconditionMismatch);
+            return Err(crate::audit::TransitionFailure::ReductionRefused);
         }
         Ok((target, recipients))
     }

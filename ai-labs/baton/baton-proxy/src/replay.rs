@@ -78,7 +78,7 @@ impl<'a> Session<'a> {
         for contract in &policy.contracts.contracts {
             engine
                 .register(contract.clone())
-                .map_err(|e| ReplayError::Duplicate(e.tool))?;
+                .map_err(|_| ReplayError::Duplicate(contract.name.clone()))?;
         }
         for authority in &policy.contracts.authorities {
             engine
@@ -149,10 +149,10 @@ impl<'a> Session<'a> {
                                 .record_output(receipt, OpaqueValue::new(content_text(msg.content.as_ref())))?;
                             session.context.insert(result);
                         }
-                        Pursuit::Terminal(block) => {
+                        Pursuit::Terminal { violations, reason } => {
                             return Err(ReplayError::ReplayBlocked {
                                 tool,
-                                reason: format!("{}: {}", block.reason, describe(&block.violations)),
+                                reason: format!("{}: {}", reason, describe(&violations)),
                             });
                         }
                         Pursuit::Stalled { violations, cause } => {
@@ -165,6 +165,15 @@ impl<'a> Session<'a> {
                             return Err(ReplayError::ReplayBlocked {
                                 tool,
                                 reason: "external approval required but no approval channel exists".into(),
+                            });
+                        }
+                        // A refusal is a protocol/state defect, not a policy
+                        // judgment: the replayed history is malformed, so fail
+                        // closed rather than treat it as a permit.
+                        Pursuit::Refused(refusal) => {
+                            return Err(ReplayError::ReplayBlocked {
+                                tool,
+                                reason: format!("refused: {refusal}"),
                             });
                         }
                     }
@@ -201,18 +210,14 @@ impl<'a> Session<'a> {
             }
         };
 
-        let audit_from = self.trajectory.state().audit().len();
+        let audit_from = self.trajectory.audit().len();
         let outcome = match self.engine.pursue(&mut self.trajectory, request, MAX_REMEDY_STEPS) {
             Pursuit::Permitted(_token) => match self.grant_trail(audit_from) {
                 None => CallOutcome::Permitted,
                 Some(reason) => CallOutcome::Granted { reason },
             },
-            Pursuit::Terminal(block) => CallOutcome::Terminal {
-                reason: format!(
-                    "`{tool}` was blocked ({}): {}",
-                    block.reason,
-                    describe(&block.violations)
-                ),
+            Pursuit::Terminal { violations, reason } => CallOutcome::Terminal {
+                reason: format!("`{tool}` was blocked ({}): {}", reason, describe(&violations)),
             },
             Pursuit::Stalled { violations, cause } => CallOutcome::Terminal {
                 reason: format!(
@@ -223,39 +228,51 @@ impl<'a> Session<'a> {
             Pursuit::NeedsApproval(_) => CallOutcome::Terminal {
                 reason: format!("`{tool}` requires external approval but no approval channel exists"),
             },
+            Pursuit::Refused(refusal) => CallOutcome::Terminal {
+                reason: format!("`{tool}` was refused and will not run: {refusal}"),
+            },
         };
         // The proxy never dispatches through the engine — the harness executes
         // the passed-through call itself. Clear the pending slot either way so
         // sibling calls in the same response evaluate independently.
-        self.trajectory.abandon_pending();
+        self.trajectory
+            .abandon_pending()
+            .expect("the proxy never releases through the engine, so no dispatch can be in flight");
         outcome
     }
 
     /// Grant trail accumulated since `audit_from`: which authority applied
     /// which remedy. Empty when the permit needed no grants.
+    /// The authority grants applied since `audit_from`, as decision-log
+    /// reasons — what distinguishes a granted call from a clean permit.
+    ///
+    /// The engine records every grant as one `AuthorizationApplied`; its
+    /// scope says which kind it was: a durable raise on a derived value is an
+    /// endorsement, a grant against the pending action acquired its effect
+    /// surface, and a check-scoped lift waived or acknowledged the facts of
+    /// this one check.
     fn grant_trail(&self, audit_from: usize) -> Option<String> {
+        use baton_core::AuthorizationScope;
         use baton_core::audit::AuditEvent;
         let mut parts = Vec::new();
-        for event in &self.trajectory.state().audit()[audit_from..] {
-            match event {
-                AuditEvent::WaiverApplied {
-                    authority, resolved, ..
-                } => {
-                    parts.push(format!(
-                        "acknowledged by '{}': {}",
-                        authority.as_str(),
-                        describe(resolved)
-                    ));
-                }
-                AuditEvent::AcceptApplied {
-                    authority, resolved, ..
-                } => {
-                    parts.push(format!("accepted by '{}': {}", authority.as_str(), describe(resolved)));
-                }
-                AuditEvent::EndorseApplied { authority, .. } => {
-                    parts.push(format!("endorsed by '{}'", authority.as_str()));
-                }
-                _ => {}
+        for event in &self.trajectory.audit()[audit_from..] {
+            if let AuditEvent::AuthorizationApplied {
+                authorization,
+                authority,
+                resolved,
+                ..
+            } = event
+            {
+                let authority = authority.as_str();
+                parts.push(match authorization.scope() {
+                    AuthorizationScope::DerivedValue { .. } => format!("endorsed by '{authority}'"),
+                    AuthorizationScope::PendingAction { .. } => {
+                        format!("accepted by '{authority}': {}", describe(resolved))
+                    }
+                    AuthorizationScope::PolicyCheck { .. } => {
+                        format!("acknowledged by '{authority}': {}", describe(resolved))
+                    }
+                });
             }
         }
         if parts.is_empty() { None } else { Some(parts.join("; ")) }

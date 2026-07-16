@@ -11,9 +11,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use baton_core::{
-    ArgumentName, ArgumentSchema, AttentionRule, Audience, AudienceRule, Authority, AuthorityMandate, Effect, Effects,
-    KnownTrust, ProposedGrant, Requirements, Ruling, ToolContract, ToolName, TrajectoryView, Trust, UserId, ValueLabel,
-    Violation,
+    ArgumentName, ArgumentSchema, AttentionRule, Audience, AudienceRule, Authority, AuthorityMandate, Authorization,
+    Effect, Effects, KnownTrust, Requirements, Ruling, ToolContract, ToolName, TrajectoryView, Trust, UserId,
+    ValueLabel, Violation,
 };
 // Only referenced from the test module's assertions on `Authority::mode`
 // (via `use super::*;`); a plain non-test build never names it.
@@ -398,7 +398,11 @@ struct AuthoritySpec {
 /// The one inline ruling TOML can declare: approve everything routed here.
 /// Competence is bounded by the mandate, not the ruling — with only
 /// `acknowledge_unknown`, this can clear unprovable facts and nothing else.
-fn allow_ruling(_grant: &ProposedGrant, violations: &[Violation], _view: &TrajectoryView<'_>) -> Option<Ruling> {
+fn allow_ruling(
+    _authorization: &Authorization,
+    violations: &[Violation],
+    _view: &TrajectoryView<'_>,
+) -> Option<Ruling> {
     let facts = violations
         .iter()
         .map(Violation::to_string)

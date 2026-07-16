@@ -7,11 +7,17 @@
 //!
 //! The moving parts:
 //!
-//! - A [`turn::Trajectory`] owns an immutable, append-only store of labeled
-//!   [`value::StoredValue`]s with full [`value::Provenance`]. Admission is
-//!   engine-owned: ingress is the only caller-labeled path (the explicit
-//!   trust boundary); every other value's label is computed inside the crate
-//!   as the conservative fold of its mandatory dependency sets.
+//! - A [`turn::Trajectory`] is an append-only [`event::EventSet`] of scoped
+//!   facts. Everything else is a [`projection`] of it — value labels and
+//!   [`value::Provenance`], effects, action/emission lifecycle, grants,
+//!   turns, and audit are all facts or derived from them, with the store
+//!   holding nothing but the opaque bodies. One public mutation = prevalidation, then one
+//!   atomic event batch. Admission is engine-owned: ingress is the only
+//!   caller-labeled path (the explicit trust boundary); every other value's
+//!   label is computed inside the crate as the conservative fold of its
+//!   mandatory dependency sets — a declared-wider output label is absorbed by
+//!   the fold, and each dimension's widening relation guards that no-widening
+//!   invariant.
 //! - A [`request::ToolRequest`] carries the executable
 //!   [`request::ArgumentTree`] — recipients, paths, and payloads are values
 //!   in this tree, and the canonical rendering handed out for dispatch comes
@@ -19,14 +25,26 @@
 //!   dependencies of whatever selected the invocation. Requirements are
 //!   checked against `L_flow = combine(L_args, L_control)` (the sink check
 //!   behind [`contract::Requirements`]), so a sanitized payload cannot
-//!   launder a secret-dependent tool or recipient choice.
-//! - Effects are monotone trajectory state
-//!   ([`audit::TrajectoryState::past_effects`]), committed when dispatch
-//!   begins (a may-effect record: a later failure removes nothing). Audit is
-//!   control-plane history ([`audit::AuditEvent`]), not a label field.
-//! - Every mutation advances the trajectory's [`revision::Revision`];
-//!   capabilities (the [`engine::ExecutionToken`]) are linear, bound to
-//!   trajectory + revision + pending action, and spent on use.
+//!   launder a secret-dependent tool or recipient choice. An assistant
+//!   emission ([`request::EmissionRequest`]) is a flow to the reserved
+//!   response sink through the same pipeline — core never infers that a turn
+//!   is "final", and caller-labeled assistant ingress does not typecheck.
+//! - Every checked flow settles in one tri-state [`engine::FlowOutcome`]:
+//!   allowed now (a linear permit), remediable (the irreducible nondominated
+//!   frontier of predicted [`plan::RemedyPlan`]s — `Reduce` via registered
+//!   transformers/transitions, `Authorize` as an exact typed delta at an
+//!   exact scope), or terminal — a proven no-remedy claim (the search is
+//!   uncapped). Stale, foreign, or conflicting proposals are
+//!   [`engine::FlowRefusal`]s outside the tri-state and touch nothing.
+//! - Effects commit when dispatch begins (release appends the may-effect
+//!   commitment; a later failure appends and removes nothing). Audit is
+//!   control-plane history ([`audit::AuditEvent`], a derived read model),
+//!   not a label field.
+//! - [`revision::Revision`] digests the event frontier; every appended batch
+//!   advances it. Capabilities (the [`engine::ExecutionToken`], receipts,
+//!   step capabilities, approvals) are linear, bound to trajectory + basis
+//!   (+ flow/plan/step), and spent on use; one-off grants are issued and
+//!   consumed as facts, so a spent grant is unavailable by projection.
 //! - `Unknown` is a first-class value of audience, trust, and effects, and an
 //!   unregistered tool is evaluable (all-`Unknown` output, `Unknown`
 //!   effects). An unprovable flow is not accepted implicitly: it routes
@@ -43,10 +61,17 @@ pub mod audit;
 pub mod contract;
 pub mod dimension;
 pub mod engine;
+// The append-only event substrate (the authoritative trajectory state) and
+// its derived projections. Public as modules but deliberately not
+// re-exported at the root: consumers read trajectory state through the
+// `Trajectory` accessors; the raw log is an audit/inspection surface.
+pub mod event;
 pub mod plan;
+pub mod projection;
 // Technically public (reusable label algebras) but never re-exported at the
 // root: a consumer composes the built-in dimensions, not the raw presets.
 pub mod preset;
+pub mod remedy;
 pub mod request;
 pub mod revision;
 pub mod transition;
@@ -93,12 +118,12 @@ impl fmt::Display for ToolName {
 pub use contract::{Requirements, Violation};
 pub use dimension::{Audience, Effect, Effects, KnownTrust, Trust, UserId};
 pub use engine::{
-    Blocked, CanonicalRequest, Decision, DispatchReceipt, DuplicateContract, ExecutionToken, PolicyEngine, Pursuit,
-    RejectedToken, StallCause, TerminalBlock, ToolContract,
+    CanonicalRequest, DispatchReceipt, DuplicateContract, Emitted, ExecutionToken, FlowOutcome, FlowPermit,
+    FlowRefusal, PolicyEngine, Pursuit, RejectedToken, StallCause, ToolContract,
 };
-pub use request::{ArgumentName, ArgumentSchema, ArgumentTree, ResponseRequest, ToolRequest};
+pub use request::{ArgumentName, ArgumentSchema, ArgumentTree, EmissionRequest, ToolRequest};
 pub use revision::{Revision, ValueId};
-pub use turn::{Speaker, Trajectory};
+pub use turn::{DispatchInFlight, Speaker, Trajectory};
 pub use value::{OpaqueValue, UnknownValue, ValueLabel};
 
 // ── Feature ─────────────────────────────────────────────────────────────
@@ -109,11 +134,17 @@ pub use approval::{
 };
 pub use audit::{AuthorityName, TransitionFailure};
 pub use contract::{AttentionRule, AudienceRule};
-pub use engine::{BlockReason, ResponseDecision, ResponsePolicy, StepCapability, StepOutcome, StepRefused};
-pub use plan::{ExitKind, Justification, NonEmptyVec, RemedyPlan, TransitionKind};
-pub use revision::PlanId;
+pub use engine::{
+    BlockReason, ContractRefused, EmissionPursuit, RegistrationRefused, RegistryFrozen, ResponsePolicy, StepCapability,
+    StepOutcome, StepRefused,
+};
+pub use plan::{NonEmptyVec, RemedyPlan};
+pub use remedy::{
+    Authorization, AuthorizationDelta, AuthorizationScope, DeltaCoordinate, LabelRaise, PlannedRemedy, ReductionTarget,
+};
+pub use revision::{FlowId, PlanId};
 pub use transition::{
-    ActionTransition, AuthorityMandate, DuplicateRegistration, EndorseDelta, LabelPredicate, ProposedGrant,
-    RegisteredTransformer, TransformerDescriptor, TransformerError, TransformerFn, TransientWaiver,
+    ActionTransition, AuthorityMandate, DuplicateRegistration, LabelPredicate, RegisteredTransformer,
+    TransformerDescriptor, TransformerError, TransformerFn,
 };
 pub use value::TransformerRef;

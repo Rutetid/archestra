@@ -10,9 +10,10 @@ use std::collections::BTreeSet;
 
 use baton_core::contract::Breach;
 use baton_core::{
-    ArgumentSchema, ArgumentTree, Audience, Authority, AuthorityMandate, BlockReason, Blocked, Decision, Effect,
-    Effects, KnownTrust, OpaqueValue, PolicyEngine, ProposedGrant, Pursuit, Requirements, Ruling, Speaker,
-    ToolContract, ToolName, ToolRequest, Trajectory, TrajectoryView, Trust, UserId, ValueId, ValueLabel, Violation,
+    ArgumentSchema, ArgumentTree, Audience, Authority, AuthorityMandate, Authorization, BlockReason, DeltaCoordinate,
+    Effect, Effects, FlowOutcome, FlowRefusal, KnownTrust, OpaqueValue, PolicyEngine, Pursuit, Requirements, Ruling,
+    Speaker, ToolContract, ToolName, ToolRequest, Trajectory, TrajectoryView, Trust, UserId, ValueId, ValueLabel,
+    Violation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -116,10 +117,26 @@ pub enum Output {
         /// only; callers must never assert on it.
         context: String,
     },
+    /// A terminal *policy* outcome: the flow was well-formed and policy
+    /// proved (or an authority ruled) it cannot proceed.
     Blocked {
         block_kind: BlockKind,
         violation_count: usize,
         /// `Display` of reason + violations — informational only.
+        detail: String,
+    },
+    /// A protocol/state refusal: the proposal was invalid, stale, or
+    /// conflicting — no policy judgment was made.
+    Refused {
+        refusal_kind: RefusalKind,
+        /// `Display` of the refusal — informational only.
+        detail: String,
+    },
+    /// A continuation the stateless oracle could not settle: neither a
+    /// policy outcome nor a refusal.
+    Unresolved {
+        unresolved_kind: UnresolvedKind,
+        /// Informational only.
         detail: String,
     },
 }
@@ -136,36 +153,71 @@ pub enum BlockKind {
     InternalInvariantFailed,
 }
 
-impl From<&BlockReason> for BlockKind {
-    fn from(reason: &BlockReason) -> Self {
-        match reason {
-            BlockReason::DeniedByAuthority { .. } => Self::DeniedByAuthority,
-            BlockReason::RequiresStructuralFix => Self::RequiresStructuralFix,
-            BlockReason::NoRemedy | BlockReason::NoAuthorityRuled => Self::NoCompetentAuthority,
-            BlockReason::ActionAlreadyPending { .. }
-            | BlockReason::UnknownValueReferenced { .. }
-            | BlockReason::StaleResponse { .. }
-            | BlockReason::PostconditionFailed => Self::InternalInvariantFailed,
-        }
+/// Wire categories for protocol/state refusals.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalKind {
+    ActionAlreadyPending,
+    EmissionAlreadyPending,
+    UnknownValueReferenced,
+    StaleBasis,
+}
+
+/// Wire categories for unsettled continuations.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UnresolvedKind {
+    NeedsApproval,
+    Stalled,
+}
+
+// ── The one wire translation ────────────────────────────────────────────
+// Every core reason, refusal, and continuation maps to its wire category
+// here and nowhere else (the taint/unknown-policy denials below construct
+// their `Blocked` outcomes through `unknown_denied_outcome`/`degrade_outcome`
+// in this section too).
+
+fn block_kind(reason: &BlockReason) -> BlockKind {
+    match reason {
+        BlockReason::DeniedByAuthority { .. } => BlockKind::DeniedByAuthority,
+        BlockReason::RequiresStructuralFix => BlockKind::RequiresStructuralFix,
+        BlockReason::NoRemedy | BlockReason::NoAuthorityRuled => BlockKind::NoCompetentAuthority,
+        BlockReason::PostconditionFailed => BlockKind::InternalInvariantFailed,
     }
 }
 
+fn refusal_kind(refusal: &FlowRefusal) -> RefusalKind {
+    match refusal {
+        FlowRefusal::ActionAlreadyPending { .. } => RefusalKind::ActionAlreadyPending,
+        FlowRefusal::EmissionAlreadyPending { .. } => RefusalKind::EmissionAlreadyPending,
+        FlowRefusal::UnknownValueReferenced { .. } => RefusalKind::UnknownValueReferenced,
+        FlowRefusal::StaleBasis { .. } => RefusalKind::StaleBasis,
+    }
+}
+
+fn acquires_effects(grant: &Authorization) -> bool {
+    grant
+        .delta()
+        .coordinates()
+        .any(|coordinate| matches!(coordinate, DeltaCoordinate::AcquireEffects(_)))
+}
+
 fn approve_effect_growth(
-    grant: &ProposedGrant,
+    grant: &Authorization,
     _violations: &[Violation],
     _trajectory: &TrajectoryView<'_>,
 ) -> Option<Ruling> {
-    matches!(grant, ProposedGrant::Accept { .. }).then(|| Ruling::Approve {
+    acquires_effects(grant).then(|| Ruling::Approve {
         reason: "legacy baton-check treats declared effects as ordinary trajectory state".to_owned(),
     })
 }
 
 fn approve_unknown(
-    grant: &ProposedGrant,
+    grant: &Authorization,
     violations: &[Violation],
     _trajectory: &TrajectoryView<'_>,
 ) -> Option<Ruling> {
-    (!matches!(grant, ProposedGrant::Accept { .. })
+    (!acquires_effects(grant)
         && !violations.is_empty()
         && violations.iter().all(|violation| {
             matches!(
@@ -178,7 +230,7 @@ fn approve_unknown(
     })
 }
 
-fn deny_all(_grant: &ProposedGrant, _violations: &[Violation], _trajectory: &TrajectoryView<'_>) -> Option<Ruling> {
+fn deny_all(_grant: &Authorization, _violations: &[Violation], _trajectory: &TrajectoryView<'_>) -> Option<Ruling> {
     Some(Ruling::Deny {
         reason: "deny-all harness authority never declassifies".to_owned(),
     })
@@ -311,6 +363,14 @@ enum CallOutcome {
         violation_count: usize,
         detail: String,
     },
+    Refused {
+        refusal_kind: RefusalKind,
+        detail: String,
+    },
+    Unresolved {
+        unresolved_kind: UnresolvedKind,
+        detail: String,
+    },
 }
 
 #[derive(Debug)]
@@ -331,11 +391,14 @@ fn configure_authorities(engine: &mut PolicyEngine, unknown_policy: UnknownPolic
     authorities.push(Authority::inline("deny-all", broad_mandate(), deny_all));
 
     for authority in authorities {
-        engine
-            .register_authority(authority)
-            .map_err(|duplicate| ProtocolError::DuplicateAuthority {
+        engine.register_authority(authority).map_err(|refused| match refused {
+            baton_core::RegistrationRefused::Duplicate(duplicate) => ProtocolError::DuplicateAuthority {
                 authority: duplicate.id,
-            })?;
+            },
+            baton_core::RegistrationRefused::Frozen(_) => {
+                unreachable!("authorities are registered before any evaluation")
+            }
+        })?;
     }
     Ok(())
 }
@@ -384,13 +447,29 @@ fn would_degrade(trajectory: &Trajectory, context: &ValueLabel, contract: Option
         None => (ValueLabel::unknown(), Effects::UNKNOWN),
     };
     context.clone().combine(output_label) != *context
-        || trajectory.state().past_effects().clone().combine(effects) != *trajectory.state().past_effects()
+        || trajectory.past_effects().clone().combine(effects) != *trajectory.past_effects()
 }
 
-fn blocked_violations(blocked: &Blocked) -> &[Violation] {
+fn blocked_violations<P>(blocked: &FlowOutcome<P>) -> &[Violation] {
     match blocked {
-        Blocked::Terminal(block) => &block.violations,
-        Blocked::Remediable { violations, .. } => violations,
+        FlowOutcome::AllowedNow(_) => &[],
+        FlowOutcome::Terminal { violations, .. } | FlowOutcome::Remediable { violations, .. } => violations,
+    }
+}
+
+/// A protocol/state refusal, kept on the wire where these cases mapped
+/// before the outcome/refusal split (the wire redesign lands separately).
+fn refused_outcome(refusal: &FlowRefusal) -> CallOutcome {
+    CallOutcome::Refused {
+        refusal_kind: refusal_kind(refusal),
+        detail: refusal.to_string(),
+    }
+}
+
+fn unresolved_outcome(kind: UnresolvedKind, detail: String) -> CallOutcome {
+    CallOutcome::Unresolved {
+        unresolved_kind: kind,
+        detail,
     }
 }
 
@@ -400,7 +479,7 @@ fn blocked_outcome(reason: &BlockReason, violations: &[Violation]) -> CallOutcom
         .collect::<Vec<_>>()
         .join("; ");
     CallOutcome::Blocked {
-        block_kind: reason.into(),
+        block_kind: block_kind(reason),
         violation_count: violations.len(),
         detail,
     }
@@ -442,8 +521,9 @@ fn evaluate_call(
 
     let request = tool_request(trajectory, context, call)?;
     match engine.evaluate(trajectory, request.clone()) {
-        Decision::Permitted(token) => dispatch(trajectory, token, false),
-        Decision::Blocked(blocked) => {
+        Err(refusal) => Ok(refused_outcome(&refusal)),
+        Ok(FlowOutcome::AllowedNow(token)) => dispatch(trajectory, token, false),
+        Ok(blocked) => {
             let violations = blocked_violations(&blocked);
             let has_unknown = violations
                 .iter()
@@ -459,7 +539,9 @@ fn evaluate_call(
                     .iter()
                     .filter(|violation| !matches!(violation, Violation::Breach(Breach::SurfaceGrowth { .. })))
                     .count();
-                trajectory.abandon_pending();
+                trajectory
+                    .abandon_pending()
+                    .expect("an oracle-denied action was never released");
                 return Ok(CallOutcome::Blocked {
                     block_kind: BlockKind::UnknownDenied,
                     violation_count,
@@ -467,6 +549,11 @@ fn evaluate_call(
                 });
             }
             let audited = unknown_policy == UnknownPolicyIn::AllowWithAudit && has_unknown;
+            // Step budget, not policy: a plan peels at most a handful of
+            // remedies per involved value (raise, lift, acquire, release),
+            // so 4×(context + recipients) + 8 comfortably exceeds any real
+            // walk while keeping a runaway re-planning loop finite. Hitting
+            // it reports `unresolved` (stall), never a policy outcome.
             let max_steps = context
                 .len()
                 .saturating_add(call.recipients.len())
@@ -474,17 +561,16 @@ fn evaluate_call(
                 .saturating_add(8);
             match engine.pursue(trajectory, request, max_steps) {
                 Pursuit::Permitted(token) => dispatch(trajectory, token, audited),
-                Pursuit::Terminal(block) => Ok(blocked_outcome(&block.reason, &block.violations)),
-                Pursuit::NeedsApproval(_) => Ok(CallOutcome::Blocked {
-                    block_kind: BlockKind::InternalInvariantFailed,
-                    violation_count: 0,
-                    detail: "internal authority unexpectedly requested external approval".to_owned(),
-                }),
-                Pursuit::Stalled { violations, cause } => Ok(CallOutcome::Blocked {
-                    block_kind: BlockKind::InternalInvariantFailed,
-                    violation_count: violations.len(),
-                    detail: format!("remedy pursuit stalled: {cause:?}"),
-                }),
+                Pursuit::Terminal { violations, reason } => Ok(blocked_outcome(&reason, &violations)),
+                Pursuit::NeedsApproval(pending) => Ok(unresolved_outcome(
+                    UnresolvedKind::NeedsApproval,
+                    format!("needs an external ruling from {}", pending.authority()),
+                )),
+                Pursuit::Stalled { violations, cause } => Ok(unresolved_outcome(
+                    UnresolvedKind::Stalled,
+                    format!("remedy pursuit stalled ({} violations): {cause:?}", violations.len()),
+                )),
+                Pursuit::Refused(refusal) => Ok(refused_outcome(&refusal)),
             }
         }
     }
@@ -495,11 +581,14 @@ pub fn run(input: &Input) -> Result<Output, ProtocolError> {
     let mut engine = PolicyEngine::new();
     configure_authorities(&mut engine, input.unknown_policy)?;
     for contract in &input.contracts {
-        engine
-            .register(contract.into())
-            .map_err(|duplicate| ProtocolError::DuplicateContract {
+        engine.register(contract.into()).map_err(|refused| match refused {
+            baton_core::ContractRefused::Duplicate(duplicate) => ProtocolError::DuplicateContract {
                 tool: duplicate.tool.to_string(),
-            })?;
+            },
+            baton_core::ContractRefused::Frozen(_) => {
+                unreachable!("contracts are registered before any evaluation")
+            }
+        })?;
     }
 
     let mut trajectory = Trajectory::new();
@@ -528,7 +617,7 @@ pub fn run(input: &Input) -> Result<Output, ProtocolError> {
             CallOutcome::Permitted { value, .. } => {
                 context.insert(value);
             }
-            CallOutcome::Blocked { .. } => {
+            CallOutcome::Blocked { .. } | CallOutcome::Refused { .. } | CallOutcome::Unresolved { .. } => {
                 return Err(ProtocolError::ReplayBlocked {
                     index,
                     tool: call.tool.clone(),
@@ -569,12 +658,76 @@ pub fn run(input: &Input) -> Result<Output, ProtocolError> {
             violation_count,
             detail,
         }),
+        CallOutcome::Refused { refusal_kind, detail } => Ok(Output::Refused { refusal_kind, detail }),
+        CallOutcome::Unresolved {
+            unresolved_kind,
+            detail,
+        } => Ok(Output::Unresolved {
+            unresolved_kind,
+            detail,
+        }),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The wire contract: every decision tag and category string, pinned.
+    /// These strings are the oracle's public API — the Python bridge
+    /// dispatches on them.
+    #[test]
+    fn wire_decisions_and_categories_serialize_stably() {
+        let permitted = serde_json::to_value(Output::Permitted {
+            audited: false,
+            context: "ctx".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(permitted["decision"], "permitted");
+        let blocked = serde_json::to_value(Output::Blocked {
+            block_kind: BlockKind::DeniedByAuthority,
+            violation_count: 0,
+            detail: String::new(),
+        })
+        .unwrap();
+        assert_eq!(blocked["decision"], "blocked");
+        let refused = serde_json::to_value(Output::Refused {
+            refusal_kind: RefusalKind::StaleBasis,
+            detail: String::new(),
+        })
+        .unwrap();
+        assert_eq!(refused["decision"], "refused");
+        let unresolved = serde_json::to_value(Output::Unresolved {
+            unresolved_kind: UnresolvedKind::Stalled,
+            detail: String::new(),
+        })
+        .unwrap();
+        assert_eq!(unresolved["decision"], "unresolved");
+
+        for (kind, wire) in [
+            (BlockKind::DeniedByAuthority, "denied_by_authority"),
+            (BlockKind::UnknownDenied, "unknown_denied"),
+            (BlockKind::RequiresStructuralFix, "requires_structural_fix"),
+            (BlockKind::NoCompetentAuthority, "no_competent_authority"),
+            (BlockKind::InternalInvariantFailed, "internal_invariant_failed"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+        }
+        for (kind, wire) in [
+            (RefusalKind::ActionAlreadyPending, "action_already_pending"),
+            (RefusalKind::EmissionAlreadyPending, "emission_already_pending"),
+            (RefusalKind::UnknownValueReferenced, "unknown_value_referenced"),
+            (RefusalKind::StaleBasis, "stale_basis"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+        }
+        for (kind, wire) in [
+            (UnresolvedKind::NeedsApproval, "needs_approval"),
+            (UnresolvedKind::Stalled, "stalled"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+        }
+    }
 
     fn input(json: serde_json::Value) -> Input {
         serde_json::from_value(json).expect("test input parses")

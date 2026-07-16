@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use baton_core::{
-    ArgumentTree, AuthorityName, BlockReason, Decision, ExecutionToken, OpaqueValue, Pursuit, Ruling, StallCause,
-    ToolName, ToolRequest, UserId, ValueId, Violation,
+    ArgumentTree, AuthorityName, BlockReason, EmissionPursuit, EmissionRequest, ExecutionToken, FlowOutcome,
+    FlowPermit, OpaqueValue, Pursuit, Ruling, StallCause, ToolName, ToolRequest, UserId, ValueId, Violation,
 };
 
 use crate::gateway::config::{GatewayConfig, ToolSim};
@@ -75,6 +75,12 @@ pub enum Outcome {
     /// A linear capability was refused mid-flow — a gateway bug surfaced
     /// loudly rather than swallowed.
     Refused { tool: ToolName, reason: String },
+    /// The final answer passed the emission check and was emitted: send
+    /// exactly `rendered` — bytes produced from the exact checked tree.
+    Responded { rendered: String },
+    /// The final answer was blocked at the emission sink; nothing was
+    /// emitted.
+    ResponseBlocked { reason: String, violations: Vec<Violation> },
 }
 
 /// The soft-blocked call's wire identity: how a re-issued call is recognized
@@ -145,7 +151,9 @@ impl Session {
                     .clone();
                 return self.settle(&sim, request, recipients);
             }
-            self.trajectory.abandon_pending();
+            self.trajectory
+                .abandon_pending()
+                .expect("the gateway settles dispatches synchronously, so no released action lingers");
             self.pending_wire = None;
         }
 
@@ -186,18 +194,25 @@ impl Session {
     /// human: permitted → dispatch, remediable → soft block, terminal → block.
     fn settle(&mut self, sim: &ToolSim, request: ToolRequest, recipients: BTreeSet<UserId>) -> Outcome {
         match self.shared().engine.evaluate(&mut self.trajectory, request) {
-            Decision::Permitted(token) => self.dispatch(sim, token),
-            Decision::Blocked(baton_core::Blocked::Remediable { violations, .. }) => Outcome::SoftBlocked {
+            Err(refusal) => {
+                self.pending_wire = None;
+                Outcome::Refused {
+                    tool: sim.name.clone(),
+                    reason: refusal.to_string(),
+                }
+            }
+            Ok(FlowOutcome::AllowedNow(token)) => self.dispatch(sim, token),
+            Ok(FlowOutcome::Remediable { violations, .. }) => Outcome::SoftBlocked {
                 tool: sim.name.clone(),
                 violations,
                 recipients,
             },
-            Decision::Blocked(baton_core::Blocked::Terminal(block)) => {
+            Ok(FlowOutcome::Terminal { violations, reason }) => {
                 self.pending_wire = None;
                 Outcome::TerminalBlocked {
                     tool: sim.name.clone(),
-                    reason: block.reason,
-                    violations: block.violations,
+                    reason,
+                    violations,
                 }
             }
         }
@@ -240,7 +255,16 @@ impl Session {
                     .pursue(&mut self.trajectory, request.clone(), MAX_REMEDY_STEPS)
                 {
                     Pursuit::Permitted(token) => return self.granted(&sim, token),
-                    Pursuit::Terminal(block) => return self.denied_or_terminal(&tool, block),
+                    Pursuit::Terminal { violations, reason } => {
+                        return self.denied_or_terminal(&tool, violations, reason);
+                    }
+                    Pursuit::Refused(refusal) => {
+                        self.pending_wire = None;
+                        return Outcome::Refused {
+                            tool,
+                            reason: refusal.to_string(),
+                        };
+                    }
                     Pursuit::NeedsApproval(pending_approval) => pending_approval,
                     Pursuit::Stalled { violations, cause } => {
                         self.pending_wire = None;
@@ -277,10 +301,13 @@ impl Session {
                 .engine
                 .apply_approval(&mut self.trajectory, pending_approval, ruling)
             {
-                Ok(Decision::Permitted(token)) => return self.granted(&sim, token),
-                Ok(Decision::Blocked(baton_core::Blocked::Remediable { .. })) => continue,
-                Ok(Decision::Blocked(baton_core::Blocked::Terminal(block))) => {
-                    return self.denied_or_terminal(&tool, block);
+                Ok(FlowOutcome::AllowedNow(FlowPermit::Execute(token))) => return self.granted(&sim, token),
+                Ok(FlowOutcome::AllowedNow(FlowPermit::Emit(_))) => {
+                    unreachable!("a tool flow's approval settles in an execution permit")
+                }
+                Ok(FlowOutcome::Remediable { .. }) => continue,
+                Ok(FlowOutcome::Terminal { violations, reason }) => {
+                    return self.denied_or_terminal(&tool, violations, reason);
                 }
                 Err(refused) => {
                     self.pending_wire = None;
@@ -291,7 +318,9 @@ impl Session {
                 }
             }
         }
-        self.trajectory.abandon_pending();
+        self.trajectory
+            .abandon_pending()
+            .expect("a stalled action was never released");
         self.pending_wire = None;
         Outcome::RemedyStalled {
             tool,
@@ -307,9 +336,14 @@ impl Session {
         }
     }
 
-    fn denied_or_terminal(&mut self, tool: &ToolName, block: baton_core::TerminalBlock) -> Outcome {
+    fn denied_or_terminal(
+        &mut self,
+        tool: &ToolName,
+        violations: Vec<baton_core::Violation>,
+        reason: BlockReason,
+    ) -> Outcome {
         self.pending_wire = None;
-        match block.reason {
+        match reason {
             BlockReason::DeniedByAuthority { authority, reason } => Outcome::Denied {
                 tool: tool.clone(),
                 reason: format!("{authority}: {reason}"),
@@ -317,7 +351,7 @@ impl Session {
             reason => Outcome::TerminalBlocked {
                 tool: tool.clone(),
                 reason,
-                violations: block.violations,
+                violations,
             },
         }
     }
@@ -365,8 +399,69 @@ impl Session {
     }
 
     /// The audit trail so far — the gateway narrates it at shutdown / on -v.
+    /// Mediate the agent's final answer through the emission sink: the text
+    /// is admitted under the conservative whole-context fold and checked —
+    /// and, when clean, emitted — as an ordinary flow. Only the returned
+    /// `rendered` bytes may reach the user. A leak that would need the
+    /// external human blocks: response escalation is not wired in this demo
+    /// (the follow-up ledger tracks it).
+    pub fn respond(&mut self, text: &str) -> Outcome {
+        let sink = ToolName::new("baton__respond");
+        let body =
+            match self
+                .trajectory
+                .admit_model_output(OpaqueValue::new(text), self.context.clone(), self.context.clone())
+            {
+                Ok(id) => id,
+                Err(unknown) => {
+                    return Outcome::Refused {
+                        tool: sink,
+                        reason: format!("context value vanished: {unknown}"),
+                    };
+                }
+            };
+        let request = EmissionRequest {
+            body: ArgumentTree::Value(body),
+            control: BTreeSet::new(),
+            basis: self.trajectory.revision(),
+        };
+        match self
+            .shared()
+            .engine
+            .pursue_emission(&mut self.trajectory, request, MAX_REMEDY_STEPS)
+        {
+            EmissionPursuit::Emitted(emitted) => Outcome::Responded {
+                rendered: emitted.rendered,
+            },
+            EmissionPursuit::Terminal { violations, reason } => Outcome::ResponseBlocked {
+                reason: reason.to_string(),
+                violations,
+            },
+            EmissionPursuit::NeedsApproval(pending) => {
+                let reason = format!(
+                    "response needs an external ruling from {}; response escalation is not wired in this demo",
+                    pending.authority()
+                );
+                drop(pending);
+                self.trajectory.abandon_pending_emission();
+                Outcome::ResponseBlocked {
+                    reason,
+                    violations: Vec::new(),
+                }
+            }
+            EmissionPursuit::Stalled { violations, cause } => Outcome::ResponseBlocked {
+                reason: format!("emission remedy stalled: {cause:?}"),
+                violations,
+            },
+            EmissionPursuit::Refused(refusal) => Outcome::Refused {
+                tool: sink,
+                reason: refusal.to_string(),
+            },
+        }
+    }
+
     pub fn audit(&self) -> impl Iterator<Item = String> {
-        self.trajectory.state().audit().iter().map(|event| event.to_string())
+        self.trajectory.audit().iter().map(|event| event.to_string())
     }
 }
 

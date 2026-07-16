@@ -12,7 +12,7 @@
 //! Run with `cargo run --example external_auditor`.
 
 use baton_core::{
-    ArgumentTree, Authority, AuthorityMandate, Decision, OpaqueValue, PolicyEngine, ProposedGrant, Pursuit, Ruling,
+    ArgumentTree, Authority, AuthorityMandate, Authorization, FlowOutcome, OpaqueValue, PolicyEngine, Pursuit, Ruling,
     Speaker, ToolContract, ToolName, ToolRequest, Trajectory, TrajectoryView, UserId, ValueId, ValueLabel, Violation,
 };
 
@@ -29,7 +29,7 @@ fn u(id: &str) -> UserId {
 /// Approves any grant routed here. Competence is gated by the mandate, so an
 /// unconditional approval vouches in exactly `AUDITOR` and accepts the send's
 /// first egress — and is not competent to wave data to anyone else.
-fn approve_auditor(_: &ProposedGrant, _: &[Violation], _: &TrajectoryView<'_>) -> Option<Ruling> {
+fn approve_auditor(_: &Authorization, _: &[Violation], _: &TrajectoryView<'_>) -> Option<Ruling> {
     Some(Ruling::Approve {
         reason: "approved sending financials to the external auditor".to_owned(),
     })
@@ -68,7 +68,7 @@ fn main() {
     // Read the invoices; the output wears the finance team's audience.
     let list = ToolRequest::new(ToolName::new("invoices.list"), ArgumentTree::empty(), []);
     let report = match engine.evaluate(&mut trajectory, list) {
-        Decision::Permitted(token) => {
+        Ok(FlowOutcome::AllowedNow(token)) => {
             let (_canonical, receipt) = trajectory.release(token).unwrap();
             trajectory
                 .record_output(receipt, OpaqueValue::new("<47 invoices totaling $1.2M>"))
@@ -94,12 +94,12 @@ fn main() {
                 .unwrap();
             println!("PERMITTED (finance approver endorsed the auditor and accepted the egress)");
         }
-        Pursuit::Terminal(block) => println!("BLOCKED — {}", block.reason),
+        Pursuit::Terminal { reason, .. } => println!("BLOCKED — {reason}"),
         other => println!("BLOCKED — {other:?}"),
     }
 
     println!("\naudit trail:");
-    for event in trajectory.state().audit() {
+    for event in trajectory.audit() {
         println!("   * {event}");
     }
 }

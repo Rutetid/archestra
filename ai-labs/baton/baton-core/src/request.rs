@@ -26,8 +26,8 @@ use serde::Serialize;
 
 use crate::ToolName;
 use crate::dimension::{Effects, UserId};
-use crate::revision::{ActionId, Revision, ValueId};
-use crate::value::{UnknownValue, ValueLabel, ValueStore};
+use crate::revision::{ActionId, FlowId, Revision, ValueId};
+use crate::value::{UnknownValue, ValueStore};
 
 /// Name of one argument in an [`ArgumentTree::Object`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -201,26 +201,8 @@ impl ArgumentSchema {
         subtree
             .leaves()
             .into_iter()
-            .map(|id| Ok(UserId::new(store.get(id)?.body().as_str())))
+            .map(|id| Ok(UserId::new(store.body(id)?.as_str())))
             .collect()
-    }
-}
-
-/// The explicit and control label folds of one flow. Internal to the check
-/// pipeline — a consumer sees the result of a check ([`crate::engine::Decision`]),
-/// not this intermediate fold.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FlowLabels {
-    pub(crate) args: ValueLabel,
-    pub(crate) control: ValueLabel,
-}
-
-impl FlowLabels {
-    /// `L_flow = combine(L_args, L_control)` — what audience and trust
-    /// requirements are checked against.
-    #[must_use]
-    pub(crate) fn flow(&self) -> ValueLabel {
-        self.args.clone().combine(self.control.clone())
     }
 }
 
@@ -247,24 +229,62 @@ impl ToolRequest {
     }
 }
 
-/// The final assistant response, mediated like any other sink: a
-/// revision-bound request referencing immutable values. The harness emits
-/// only bytes rendered from this exact checked tree.
+/// An assistant emission proposal, mediated like any other sink: a request
+/// referencing immutable values, checked through the same pipeline as a tool
+/// dispatch. The harness emits only bytes rendered from the exact checked
+/// tree. Core never infers that a turn is "final" — the caller proposes an
+/// emission whenever assistant output is about to cross the mediation
+/// boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ResponseRequest {
+pub struct EmissionRequest {
     pub body: ArgumentTree<ValueId>,
     pub control: BTreeSet<ValueId>,
-    /// The trajectory revision this response was composed against.
+    /// The trajectory revision this emission was composed against. A fresh
+    /// proposal composed against a revision the trajectory moved past is
+    /// refused; once pending, re-entry identity is the request content.
     pub basis: Revision,
 }
 
-impl ResponseRequest {
-    pub(crate) fn flow_labels(&self, store: &ValueStore) -> Result<FlowLabels, UnknownValue> {
-        let leaves = self.body.leaves();
-        Ok(FlowLabels {
-            args: store.fold_labels(leaves.iter())?,
-            control: store.fold_labels(self.control.iter())?,
-        })
+/// The stored pending emission: the (at most one) emission proposal whose
+/// check came back remediable. Like a pending action it retains BOTH the
+/// immutable original (the identity basis for idempotent re-entry) and the
+/// current form (what actually gets checked and emitted — a `DeriveValue`
+/// remedy substitutes into it). Independent of the pending tool-action slot.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct PendingEmission {
+    /// The checked flow this emission is the target of: plans, check-scoped
+    /// grants, and check facts bind to it.
+    flow: FlowId,
+    original: EmissionRequest,
+    current: EmissionRequest,
+}
+
+impl PendingEmission {
+    pub(crate) fn proposed(flow: FlowId, request: EmissionRequest) -> Self {
+        Self {
+            flow,
+            original: request.clone(),
+            current: request,
+        }
+    }
+
+    /// The checked flow this emission is the target of.
+    pub fn flow(&self) -> FlowId {
+        self.flow
+    }
+
+    pub fn original(&self) -> &EmissionRequest {
+        &self.original
+    }
+
+    pub fn current(&self) -> &EmissionRequest {
+        &self.current
+    }
+
+    /// A content-justified `Derive` step replaced `from` with the derived
+    /// `to` in the current body tree. The original proposal is untouched.
+    pub(crate) fn substitute_body(&mut self, from: ValueId, to: ValueId) {
+        self.current.body.substitute(from, to);
     }
 }
 
@@ -281,9 +301,12 @@ pub enum ActionState {
 /// possibly constrained form (what actually gets checked and dispatched) —
 /// `ActionId` alone cannot distinguish re-entry of the original from an
 /// independent proposal that merely equals the constrained form.
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct PendingAction {
     id: ActionId,
+    /// The checked flow this action is the target of: plans, check-scoped
+    /// grants, and check facts bind to it; re-entry re-checks the same flow.
+    flow: FlowId,
     original: ToolRequest,
     current: ToolRequest,
     proposed_effects: Effects,
@@ -295,9 +318,10 @@ pub struct PendingAction {
 }
 
 impl PendingAction {
-    pub(crate) fn proposed(id: ActionId, request: ToolRequest, proposed_effects: Effects) -> Self {
+    pub(crate) fn proposed(id: ActionId, flow: FlowId, request: ToolRequest, proposed_effects: Effects) -> Self {
         Self {
             id,
+            flow,
             original: request.clone(),
             current: request,
             proposed_effects,
@@ -308,6 +332,11 @@ impl PendingAction {
 
     pub fn id(&self) -> ActionId {
         self.id
+    }
+
+    /// The checked flow this action is the target of.
+    pub fn flow(&self) -> FlowId {
+        self.flow
     }
 
     pub fn original(&self) -> &ToolRequest {
@@ -370,7 +399,7 @@ pub(crate) fn render(tree: &ArgumentTree<ValueId>, store: &ValueStore) -> Result
 fn render_into(tree: &ArgumentTree<ValueId>, store: &ValueStore, out: &mut String) -> Result<(), UnknownValue> {
     match tree {
         ArgumentTree::Value(id) => {
-            render_string(store.get(*id)?.body().as_str(), out);
+            render_string(store.body(*id)?.as_str(), out);
         }
         ArgumentTree::List(items) => {
             out.push('[');
@@ -417,19 +446,11 @@ fn render_string(s: &str, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dimension::Trust;
-    use crate::revision::TurnId;
     use crate::value::OpaqueValue;
 
     fn store_with(bodies: &[&str]) -> (ValueStore, Vec<ValueId>) {
         let mut store = ValueStore::default();
-        let ids = bodies
-            .iter()
-            .enumerate()
-            .map(|(i, body)| {
-                store.admit_ingress(TurnId::new(i as u64), ValueLabel::identity(), OpaqueValue::new(*body))
-            })
-            .collect();
+        let ids = bodies.iter().map(|body| store.admit(OpaqueValue::new(*body))).collect();
         (store, ids)
     }
 
@@ -475,27 +496,19 @@ mod tests {
     }
 
     #[test]
-    fn flow_label_folds_arguments_and_control() {
-        let mut store = ValueStore::default();
-        let clean = store.admit_ingress(TurnId::new(0), ValueLabel::identity(), OpaqueValue::new("payload"));
-        let tainted = store.admit_ingress(
-            TurnId::new(1),
-            ValueLabel {
-                trust: Trust::SUSPICIOUS,
-                ..ValueLabel::identity()
+    fn substitution_touches_only_the_current_body() {
+        let (_, ids) = store_with(&["raw", "clean"]);
+        let mut pending = PendingEmission::proposed(
+            FlowId::new(0),
+            EmissionRequest {
+                body: ArgumentTree::Value(ids[0]),
+                control: BTreeSet::new(),
+                basis: crate::revision::Revision::INITIAL,
             },
-            OpaqueValue::new("raw page"),
         );
-
-        let request = ResponseRequest {
-            body: ArgumentTree::Value(clean),
-            control: BTreeSet::from([tainted]),
-            basis: crate::revision::Revision::INITIAL,
-        };
-        let labels = request.flow_labels(&store).unwrap();
-        assert_eq!(labels.args.trust, Trust::TRUSTED);
-        assert_eq!(labels.control.trust, Trust::SUSPICIOUS);
-        assert_eq!(labels.flow().trust, Trust::SUSPICIOUS);
+        pending.substitute_body(ids[0], ids[1]);
+        assert_eq!(pending.current().body, ArgumentTree::Value(ids[1]));
+        assert_eq!(pending.original().body, ArgumentTree::Value(ids[0]));
     }
 
     #[test]
