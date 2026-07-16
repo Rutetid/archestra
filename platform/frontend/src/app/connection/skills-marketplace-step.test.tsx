@@ -13,9 +13,10 @@ function renderWithClient(ui: ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const result = render(
     <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
   );
+  return { ...result, queryClient };
 }
 
 const {
@@ -331,8 +332,54 @@ describe("SkillsMarketplaceStep", () => {
       screen.getByTestId("skills-marketplace-confirm-revoke"),
     );
 
-    await waitFor(() =>
-      expect(revokeLinkMock).toHaveBeenCalledWith(ACTIVE_LINK.id),
+    await waitFor(() => {
+      expect(revokeLinkMock).toHaveBeenCalledWith(ACTIVE_LINK.id);
+      expect(
+        screen.queryByText(/Revoke and block all existing clones/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("returns to create panel after revoking the link", async () => {
+    let activeLinks: (typeof ACTIVE_LINK)[] = [ACTIVE_LINK];
+    listLinksMock.mockImplementation(() => ({
+      data: { links: activeLinks },
+      isPending: false,
+    }));
+
+    const { rerender, queryClient } = renderWithClient(
+      <SkillsMarketplaceStep client={anyClient} />,
     );
+
+    revokeLinkMock.mockImplementation(async (id: string) => {
+      activeLinks = activeLinks.filter((l) => l.id !== id);
+      return { success: true };
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Revoke$/i }),
+    );
+
+    expect(
+      screen.getByText(/Revoke and block all existing clones/i),
+    ).toBeVisible();
+
+    await userEvent.click(
+      screen.getByTestId("skills-marketplace-confirm-revoke"),
+    );
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <SkillsMarketplaceStep client={anyClient} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(revokeLinkMock).toHaveBeenCalledWith(ACTIVE_LINK.id);
+      expect(
+        screen.queryByText(/Revoke and block all existing clones/i),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("skills-marketplace-create")).toBeVisible();
+    });
   });
 });

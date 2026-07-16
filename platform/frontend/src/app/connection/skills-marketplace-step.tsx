@@ -203,7 +203,7 @@ function ExistingLinkPanel({
   link: SkillShareLink | null;
   totalSkills: number;
   revealed: RevealedClone | null;
-  onReveal: (revealed: RevealedClone) => void;
+  onReveal: (revealed: RevealedClone | null) => void;
 }) {
   const revokeShare = useRevokeSkillShareLink();
   const rotateShare = useRotateSkillShareLink();
@@ -232,7 +232,8 @@ function ExistingLinkPanel({
     if (!link) return;
     await revokeShare.mutateAsync(link.id);
     setConfirmRevoke(false);
-  }, [revokeShare, link]);
+    onReveal(null);
+  }, [revokeShare, link, onReveal]);
 
   const linkSkillCount = link?.skills.length ?? totalSkills;
   const stale = link !== null && linkSkillCount !== totalSkills;
@@ -276,17 +277,7 @@ function ExistingLinkPanel({
                 : "Refresh to reveal URL"}
           </Button>
         )}
-        {link && !confirmRevoke ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setConfirmRevoke(true)}
-            className="text-destructive hover:text-destructive"
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Revoke
-          </Button>
-        ) : (
+        {confirmRevoke ? (
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">
               Revoke and block all existing clones?
@@ -309,7 +300,17 @@ function ExistingLinkPanel({
               {revokeShare.isPending ? "Revoking…" : "Confirm revoke"}
             </Button>
           </div>
-        )}
+        ) : link ? (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setConfirmRevoke(true)}
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Revoke
+          </Button>
+        ) : null}
       </div>
     </div>
   );
